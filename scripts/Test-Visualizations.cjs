@@ -46,35 +46,60 @@ function harness() {
   vm.runInContext('data={preview:true,time:"2026-10-12T12:00:00Z"}', context);
   return { run: (code) => vm.runInContext(code, context), elements };
 }
-test("missing power stays blank; a measured zero stays a bar", () => {
+test("missing power stays blank; a measured zero remains visible", () => {
   const h = harness();
-  h.run("powerBars([{time:data.time,gpuPower:null}])");
+  h.run("powerTrend([{time:data.time,gpuPower:null}])");
   assert.match(h.elements.get("powerChart").innerHTML, /データがありません/);
-  h.run("powerBars([{time:data.time,gpuPower:0}])");
-  assert.match(h.elements.get("powerChart").innerHTML, /<rect /);
-  assert.doesNotMatch(
-    h.elements.get("powerChart").innerHTML,
-    /データがありません/,
+  assert.equal(h.elements.get("powerPeak").textContent, "—");
+  h.run("powerTrend([{time:data.time,gpuPower:0}])");
+  assert.match(h.elements.get("powerChart").innerHTML, /<circle/);
+  assert.equal(h.elements.get("powerPeak").textContent, "0.0 W");
+});
+test("recording reports a real interval, ignoring history outside selection", () => {
+  const h = harness();
+  const facts = h.run(
+    `recordingFacts({history:[{time:'2026-10-12T11:40:00Z'},{time:'2026-10-12T11:59:40Z'},{time:'2026-10-12T11:59:42Z'},{time:'2026-10-12T11:59:54Z'}]})`,
+  );
+  assert.equal(facts.count, 3);
+  assert.equal(facts.gaps.length, 1);
+  assert.equal(facts.gaps[0].seconds, 12);
+});
+test("constant voltages stay a single occupied interval; counts conserved", () => {
+  const h = harness();
+  const d = h.run("distribution([5.06,5.06,null,NaN,5.06],5)");
+  assert.equal(d.count, 3);
+  assert.equal(
+    d.bins.reduce((a, b) => a + b, 0),
+    3,
+  );
+  assert.equal(d.bins.filter((n) => n > 0).length, 1);
+  assert.ok(d.min < 5);
+  assert.ok(d.max > 5.06);
+  assert.equal(d.low, d.high);
+});
+test("voltage outliers remain in distribution, no clipping to nominal range", () => {
+  const d = harness().run("distribution([12.1,12.1,14],12)");
+  assert.equal(d.high, 14);
+  assert.ok(d.max > 14);
+  assert.equal(
+    d.bins.reduce((a, b) => a + b, 0),
+    3,
   );
 });
-test("continuity splits at gaps and session boundaries", () => {
+test("missing voltage has no fabricated distribution", () => {
   const h = harness();
   h.run(
-    `continuity({cpu:{history:[{time:'2026-10-12T11:59:40Z',session:'a'},{time:'2026-10-12T11:59:42Z',session:'a'},{time:'2026-10-12T11:59:54Z',session:'a'},{time:'2026-10-12T11:59:56Z',session:'b'}]},board:{history:[]},activity:{history:[]}})`,
+    '$("rail").value="v12";voltageInstruments({state:"recording",history:[]})',
   );
-  const html = h.elements.get("continuityChart").innerHTML;
-  assert.equal((html.match(/fill="#a4ddc4"/g) || []).length, 3);
+  assert.equal(h.elements.get("voltageCurrent").textContent, "—");
+  assert.doesNotMatch(h.elements.get("voltageDistribution").innerHTML, /<path/);
 });
-test("voltage over-range remains explicit, missing voltage is not zero", () => {
+test("a fresh empty stream never claims continuous recording", () => {
   const h = harness();
   h.run(
-    'voltageInstruments({state:"recording",history:[{time:data.time,v12:14,v5:null,v33:3.3}]})',
+    'const empty={state:"recording",age:0,history:[]};continuity({cpu:empty,board:empty,activity:empty})',
   );
-  const rows = h.elements.get("voltageRails").children;
-  assert.match(rows[0].children[1].innerHTML, /→/);
-  assert.match(rows[0].children[1].attributes["aria-label"], /14.000V/);
-  assert.match(rows[1].children[1].attributes["aria-label"], /取得不可/);
-  assert.doesNotMatch(rows[1].children[1].innerHTML, /<circle/);
+  assert.match(h.elements.get("recordingVerdict").textContent, /待っています/);
 });
 test("thermal area does not fill across a missing interval", () => {
   const h = harness();
@@ -85,7 +110,7 @@ test("thermal area does not fill across a missing interval", () => {
     (
       h.elements
         .get("tempChart")
-        .innerHTML.match(/fill="url\(#thermalFill\)"/g) || []
+        .innerHTML.match(/fill="url\(#tempChartFill\)"/g) || []
     ).length,
     2,
   );

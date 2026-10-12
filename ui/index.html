@@ -90,15 +90,40 @@
         </section>
         <section class="voltage-instrument">
           <div class="eyebrow">02 / BOARD READINGS</div>
-          <h2>電圧の偏差</h2>
-          <p class="muted">基準値に対する、現在の読み取り値</p>
-          <div id="voltageRails"></div>
-          <p class="instrument-note">
-            目盛りは基準値の±5%。範囲外は端に矢印で表示。<br />基板センサーの値であり、PSUの合否判定ではありません。
-          </p>
-          <div class="instrument-footer">
-            <span>AC WAVEFORM</span><b>取得対象外</b>
+          <div class="panelhead">
+            <h2>電圧のばらつき</h2>
+            <select id="rail" aria-label="電圧の種類">
+              <option value="v12">+12V</option>
+              <option value="v5">+5V</option>
+              <option value="v33">AVCC3</option>
+            </select>
           </div>
+          <p class="muted">どの電圧で測定されることが多いか</p>
+          <div class="distribution-reading">
+            <div>
+              <span class="metric-caption">現在値</span>
+              <div class="reading">
+                <span id="voltageCurrent" class="value">—</span
+                ><span class="unit">V</span>
+              </div>
+            </div>
+            <p id="voltageDelta"></p>
+          </div>
+          <svg
+            id="voltageDistribution"
+            class="distribution-chart"
+            role="img"
+            aria-label="選択した電圧の実測頻度分布"
+          ></svg>
+          <div class="distribution-legend">
+            <span>塗り：測定回数</span><span>実線：現在値</span
+            ><span>破線：基準値</span>
+          </div>
+          <p id="distributionSummary" class="distribution-summary"></p>
+          <p id="voltageExtent" class="muted"></p>
+          <p class="instrument-note">
+            山が高い電圧ほど測定回数が多い。正規分布への当てはめは行いません。<br />基板センサーの記録であり、電源の合否判定ではありません。
+          </p>
         </section>
       </div>
       <div class="evidence-row">
@@ -111,31 +136,33 @@
               ><span class="unit">W</span>
             </div>
           </div>
+          <div class="power-summary">
+            <span>期間内ピーク <b id="powerPeak">—</b></span
+            ><span>期間内平均 <b id="powerMean">—</b></span>
+          </div>
           <svg
             class="chart"
             id="powerChart"
             role="img"
-            aria-label="GPU消費電力の推移、区間ごとの最大値"
+            aria-label="GPU消費電力の時間変化"
           ></svg>
-          <p class="chart-note">各区間の最大値 · 表示期間は温度と共通</p>
+          <p class="chart-note">
+            GPU単体の測定値です。PC全体の消費電力ではありません。
+          </p>
         </section>
         <section class="integrity-panel">
           <div class="panelhead">
             <div>
               <div class="eyebrow">04 / RECORDING CONTINUITY</div>
-              <h2>記録の連続性</h2>
+              <h2>ログは取れている？</h2>
             </div>
             <span class="chip" id="gapCount">LOGS</span>
           </div>
-          <svg
-            class="chart"
-            id="continuityChart"
-            role="img"
-            aria-label="CPU、基板、GPUログの取得済み区間"
-          ></svg>
+          <p id="recordingVerdict" class="recording-verdict"></p>
+          <div id="recordingRows"></div>
           <div id="issues" class="scroll"></div>
           <p class="chart-note">
-            明るい区間は取得済み。6秒超の間隔やセッション変更では分割します。スリープ・手動更新の間隔も含みます。
+            取得済みの記録同士を比較。6秒超の間隔を「途切れ」として表示します。スリープや手動更新も含みます。
           </p>
         </section>
       </div>

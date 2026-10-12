@@ -13,6 +13,9 @@ pub struct Sources { pub sensor_root: PathBuf, pub activity_root: PathBuf }
 pub fn app_dir() -> PathBuf {
     std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir).join("PCDiagnostics")
 }
+pub fn machine_dir() -> PathBuf {
+    std::env::var_os("ProgramData").map(PathBuf::from).unwrap_or_else(||PathBuf::from("C:\\ProgramData")).join("PCDiagnostics")
+}
 impl Default for Sources {
     fn default() -> Self {
         Self { sensor_root: std::env::var_os("ProgramFiles").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("C:\\Program Files")).join("CodexPCDiagnostics/sensor-logs"), activity_root: app_dir().join("logs") }
@@ -20,11 +23,14 @@ impl Default for Sources {
 }
 impl Sources {
     pub fn load() -> Result<Self, String> {
+        let shared=machine_dir().join("sources.json");
+        if shared.exists() { return serde_json::from_slice(&fs::read(shared).map_err(|e|e.to_string())?).map_err(|e|format!("Invalid machine source configuration: {e}")); }
         let path = app_dir().join("sources.json");
         if !path.exists() { return Ok(Self::default()); }
         serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?).map_err(|e| format!("Invalid source configuration: {e}"))
     }
     pub fn save(&self) -> Result<(), String> {
+        if machine_dir().join("sources.json").exists() { return Err("Unified recording is configured. Use pcdiag logs to inspect its shared location; per-user source overrides are disabled.".into()); }
         if !self.sensor_root.is_dir() || !self.activity_root.is_dir() { return Err("Both log directories must exist.".into()); }
         fs::create_dir_all(app_dir()).map_err(|e| e.to_string())?;
         fs::write(app_dir().join("sources.json"), serde_json::to_vec_pretty(self).unwrap()).map_err(|e| e.to_string())

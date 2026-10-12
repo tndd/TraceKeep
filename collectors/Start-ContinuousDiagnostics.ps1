@@ -1,9 +1,10 @@
-param([int]$MaxSamples = 0)
+param([int]$MaxSamples = 0, [string]$LogRoot)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Read-NvidiaDiagnostics.ps1')
-$root = Join-Path $PSScriptRoot 'sensor-logs'
+$root = $LogRoot
+if (-not $root) { $root = Join-Path $PSScriptRoot 'sensor-logs' }
 [void][IO.Directory]::CreateDirectory($root)
-$mutex = [Threading.Mutex]::new($false, 'Local\PCDiagnostics-Activity-v1')
+$mutex = [Threading.Mutex]::new($false, 'Global\PCDiagnostics-Activity-v2')
 $locked = $false
 $legacyMutex = [Threading.Mutex]::new($false, ('Local\CodexPCDiagnostics-' + $env:USERNAME + '-20261010'))
 $legacyLocked = $false
@@ -38,7 +39,7 @@ try {
     $session = [guid]::NewGuid().ToString()
     $gpuExe = Get-ChildItem -Path 'C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
     $os = Get-CimInstance Win32_OperatingSystem
-    Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=2; lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; note='CPU temperature is recorded independently in C:\Program Files\CodexPCDiagnostics\sensor-logs. No AC or PSU temperature measurements are available here.'})
+    Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=2; lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; logRoot=$root; note='No AC waveform or internal PSU protection measurements are available.'})
     $lastEventTime = (Get-Date).AddMinutes(-5)
     $lastEventId = 0L
     $nextEvents = Get-Date

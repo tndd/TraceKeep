@@ -19,6 +19,8 @@ jobs:
         run: node --test scripts/Test-Visualizations.cjs
       - name: Collector migration guard
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-CollectorCoordination.ps1
+      - name: Unified recorder with simulated workers
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
@@ -33,10 +35,16 @@ jobs:
       - name: Build desktop executable
         working-directory: src-tauri
         run: cargo +stable build --release --locked
+      - name: Assemble CLI and optional GUI package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory package | Out-Null
+          Copy-Item src-tauri/target/release/pcdiag.exe,src-tauri/target/release/pc-diagnostics.exe,src-tauri/Cargo.lock -Destination package
+          Copy-Item management,collectors -Destination package -Recurse
+          Copy-Item README.md -Destination package
+          & package/pcdiag.exe help
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: pc-diagnostics-windows
-          path: |
-            src-tauri/target/release/pc-diagnostics.exe
-            src-tauri/Cargo.lock
+          path: package
           if-no-files-found: error

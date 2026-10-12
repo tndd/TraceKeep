@@ -3,6 +3,7 @@ name = "pc-diagnostics"
 version = "0.1.0"
 description = "Local PC diagnostics console"
 edition = "2021"
+default-run = "pcdiag"
 rust-version = "1.85"
 
 [lib]

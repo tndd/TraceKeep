@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>PC Diagnostics</title>
-    <link rel="stylesheet" href="styles.css" />
+    <link rel="stylesheet" href="observatory.css" />
   </head>
   <body>
     <aside class="sidebar">
@@ -30,8 +30,10 @@
       <header>
         <div>
           <div class="eyebrow">SYSTEM OBSERVATORY <span>/ 01</span></div>
-          <h1>見えない変化を、捉える。</h1>
-          <p class="muted">停止前の兆候をつなぐ、ローカル診断コンソール。</p>
+          <h1>システムの現在地。</h1>
+          <p class="muted">
+            温度、電力、記録の途切れから、停止前の兆候を追う。
+          </p>
         </div>
         <button class="primary" id="export">
           <span>↓</span> スナップショットを保存
@@ -46,62 +48,34 @@
         ><span id="updated"></span>
       </div>
       <div class="streams" id="streams"></div>
-      <section class="cards">
-        <article class="card featured">
-          <div class="label">
-            <span class="metric-dot cyan"></span> CPU TEMPERATURE
-          </div>
-          <div class="reading">
-            <span class="value" id="cpuTemp">—</span
-            ><span class="unit">°C</span>
-          </div>
-          <div class="card-foot">Tctl / Tdie <span>PROCESSOR</span></div>
-        </article>
-        <article class="card">
-          <div class="label">
-            <span class="metric-dot blue"></span> GPU TEMPERATURE
-          </div>
-          <div class="reading">
-            <span class="value" id="gpuTemp">—</span
-            ><span class="unit">°C</span>
-          </div>
-          <div class="card-foot">Graphics core <span>GPU</span></div>
-        </article>
-        <article class="card">
-          <div class="label">
-            <span class="metric-dot violet"></span> GPU POWER
-          </div>
-          <div class="reading">
-            <span class="value" id="gpuPower">—</span
-            ><span class="unit">W</span>
-          </div>
-          <div class="card-foot">消費電力 <span>POWER</span></div>
-        </article>
-        <article class="card rail-card">
-          <div class="label">
-            BOARD VOLTAGE <span class="chip">SENSOR</span>
-          </div>
-          <div class="rails">
-            <div><span>＋12V</span><b id="v12">—</b><small>V</small></div>
-            <div><span>＋5V</span><b id="v5">—</b><small>V</small></div>
-            <div><span>AVCC3</span><b id="v33">—</b><small>V</small></div>
-          </div>
-        </article>
-      </section>
-      <div class="section-label" id="telemetry">
-        <span>01 / LIVE TELEMETRY</span><span>RECENT HISTORY</span>
-      </div>
-      <div class="charts">
-        <section class="panel">
+      <div class="observatory" id="telemetry">
+        <section class="thermal-stage">
           <div class="panelhead">
             <div>
-              <h2>Thermal profile</h2>
-              <p class="muted">CPU・GPU温度の推移</p>
+              <div class="eyebrow">01 / THERMAL OBSERVATION</div>
+              <h2>温度の動き</h2>
             </div>
             <select id="range" aria-label="表示期間">
               <option value="300">直近5分</option>
               <option value="900">直近15分</option>
             </select>
+          </div>
+          <div class="thermal-readings">
+            <div class="processor-reading">
+              <div class="label">CPU <span>Tctl / Tdie</span></div>
+              <div class="reading">
+                <span class="value" id="cpuTemp">—</span
+                ><span class="unit">°C</span>
+              </div>
+            </div>
+            <div class="graphics-reading">
+              <div class="label">GPU <span>Graphics core</span></div>
+              <div class="reading">
+                <span class="value" id="gpuTemp">—</span
+                ><span class="unit">°C</span>
+              </div>
+              <p class="muted">同じ時間軸で比較</p>
+            </div>
           </div>
           <svg
             class="chart"
@@ -114,55 +88,67 @@
             ><small>欠測区間は線をつなぎません</small>
           </div>
         </section>
-        <section class="panel">
-          <div class="panelhead">
-            <div>
-              <h2>Voltage stability</h2>
-              <p class="muted">マザーボードの電圧読み取り値</p>
+        <section class="voltage-instrument">
+          <div class="eyebrow">02 / BOARD READINGS</div>
+          <h2>電圧の偏差</h2>
+          <p class="muted">基準値に対する、現在の読み取り値</p>
+          <div id="voltageRails"></div>
+          <p class="instrument-note">
+            目盛りは基準値の±5%。範囲外は端に矢印で表示。<br />基板センサーの値であり、PSUの合否判定ではありません。
+          </p>
+          <div class="instrument-footer">
+            <span>AC WAVEFORM</span><b>取得対象外</b>
+          </div>
+        </section>
+      </div>
+      <div class="evidence-row">
+        <section class="power-panel">
+          <div class="eyebrow">03 / GPU POWER</div>
+          <div class="power-heading">
+            <h2>消費電力</h2>
+            <div class="reading">
+              <span class="value" id="gpuPower">—</span
+              ><span class="unit">W</span>
             </div>
-            <select id="rail" aria-label="電圧の種類">
-              <option value="v12">＋12V</option>
-              <option value="v5">＋5V</option>
-              <option value="v33">AVCC3</option>
-            </select>
           </div>
           <svg
             class="chart"
-            id="voltChart"
+            id="powerChart"
             role="img"
-            aria-label="選択した基板電圧の推移"
+            aria-label="GPU消費電力の推移、区間ごとの最大値"
           ></svg>
-          <p class="chart-note">
-            商用ACの波形・PSU内部の保護履歴は取得対象外です。
-          </p>
+          <p class="chart-note">各区間の最大値 · 表示期間は温度と共通</p>
         </section>
-      </div>
-      <div class="split">
-        <section class="panel">
+        <section class="integrity-panel">
           <div class="panelhead">
             <div>
-              <h2>Power & thermal signals</h2>
-              <p class="muted">GPUの制限状態 / ドライバーの累積時間</p>
+              <div class="eyebrow">04 / RECORDING CONTINUITY</div>
+              <h2>記録の連続性</h2>
             </div>
-            <span class="chip">GPU</span>
+            <span class="chip" id="gapCount">LOGS</span>
           </div>
-          <div id="reasons"></div>
-          <p class="chart-note">
-            累積値はドライバーの再初期化でリセットされる場合があります。外部電力制限だけでPSU故障とは断定できません。
-          </p>
-        </section>
-        <section class="panel">
-          <div class="panelhead">
-            <div>
-              <h2>Recording integrity</h2>
-              <p class="muted">更新停止・取得エラー・6秒超の記録間隔</p>
-            </div>
-            <span class="chip">LOGS</span>
-          </div>
+          <svg
+            class="chart"
+            id="continuityChart"
+            role="img"
+            aria-label="CPU、基板、GPUログの取得済み区間"
+          ></svg>
           <div id="issues" class="scroll"></div>
-          <p class="chart-note">スリープや手動更新による間隔も含まれます。</p>
+          <p class="chart-note">
+            明るい区間は取得済み。6秒超の間隔やセッション変更では分割します。スリープ・手動更新の間隔も含みます。
+          </p>
         </section>
       </div>
+      <section class="signals-panel">
+        <div class="signal-heading">
+          <div class="eyebrow">GPU LIMIT SIGNALS</div>
+          <h2>電力・熱の制限状態</h2>
+        </div>
+        <div id="reasons"></div>
+        <p class="chart-note">
+          時間はドライバーの累積値（再初期化でリセットされる場合あり）。外部電力制限だけでPSU故障とは断定できません。
+        </p>
+      </section>
       <div class="section-label" id="hardware">
         <span>02 / HARDWARE INSPECTOR</span><span>RAW SENSOR CHANNELS</span>
       </div>

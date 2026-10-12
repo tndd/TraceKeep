@@ -28,6 +28,145 @@ function clock(t) {
 function fmt(v, d = 1) {
   return typeof v === "number" && Number.isFinite(v) ? v.toFixed(d) : "—";
 }
+function plotWindow() {
+  const end = data?.preview ? Date.parse(data.time) : Date.now();
+  return { end, start: end - Number($("range").value) * 1000 };
+}
+function numeric(v) {
+  return typeof v === "number" && Number.isFinite(v);
+}
+function recent(rows) {
+  const { start, end } = plotWindow();
+  return rows.filter(
+    (r) => Date.parse(r.time) >= start && Date.parse(r.time) <= end,
+  );
+}
+function voltageInstruments(stream) {
+  $("voltageRails").replaceChildren();
+  const last = stream.history.at(-1) || {};
+  for (const [key, label, nom] of [
+    ["v12", "+12V", 12],
+    ["v5", "+5V", 5],
+    ["v33", "AVCC3", 3.3],
+  ]) {
+    const v = last[key],
+      valid = numeric(v),
+      delta = valid ? (v / nom - 1) * 100 : null;
+    const box = el("div", undefined, "rail-instrument"),
+      caption = el("div", undefined, "rail-caption");
+    caption.append(
+      el("strong", label),
+      el("span", fmt(v, 3), "rail-value"),
+      el("small", "V"),
+    );
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 300 40");
+    svg.setAttribute("class", "rail-gauge");
+    svg.setAttribute("role", "img");
+    svg.setAttribute(
+      "aria-label",
+      `${label}: ${valid ? fmt(v, 3) + "V、基準から" + fmt(delta, 2) + "%" : "取得不可"}`,
+    );
+    let marks =
+      '<line x1="10" y1="22" x2="290" y2="22" stroke="#3c494b" stroke-width="4"/>';
+    for (let i = 0; i <= 10; i++)
+      marks += `<line x1="${10 + i * 28}" y1="${i === 5 ? 5 : 15}" x2="${10 + i * 28}" y2="29" stroke="${i === 5 ? "#c1cfca" : "#5a6667"}"/>`;
+    if (valid) {
+      const x = 10 + (Math.max(-5, Math.min(5, delta)) + 5) * 28;
+      marks += `<line x1="150" y1="22" x2="${x}" y2="22" stroke="#d9b982" stroke-width="4"/><circle cx="${x}" cy="22" r="5" fill="#ecd6ab" stroke="#151d20" stroke-width="2"/>`;
+      if (Math.abs(delta) > 5)
+        marks += `<text x="${delta > 0 ? 288 : 12}" y="11" fill="#f8c58d" font-size="13" text-anchor="middle">${delta > 0 ? "→" : "←"}</text>`;
+    }
+    svg.innerHTML = marks;
+    const vals = recent(stream.history)
+        .map((r) => r[key])
+        .filter(numeric),
+      detail = el("div", undefined, "rail-detail");
+    detail.append(
+      el("span", `基準 ${nom.toFixed(1)}V`),
+      el("b", valid ? `${delta >= 0 ? "+" : ""}${fmt(delta, 2)}%` : "取得不可"),
+    );
+    box.append(
+      caption,
+      svg,
+      detail,
+      el(
+        "p",
+        vals.length
+          ? `期間内 ${fmt(Math.min(...vals), 3)}–${fmt(Math.max(...vals), 3)} V`
+          : "期間内のデータなし",
+        "chart-note",
+      ),
+    );
+    if (stream.state !== "recording")
+      box.append(el("p", labels[stream.state] + " / 最終値", "tag bad"));
+    $("voltageRails").append(box);
+  }
+}
+function powerBars(rows) {
+  const svg = $("powerChart"),
+    { start, end } = plotWindow(),
+    bins = Array(48).fill(null);
+  for (const r of recent(rows)) {
+    if (!numeric(r.gpuPower)) continue;
+    const i = Math.min(
+      47,
+      Math.floor(((Date.parse(r.time) - start) / (end - start)) * 48),
+    );
+    bins[i] = Math.max(bins[i] ?? 0, r.gpuPower);
+  }
+  const ceiling = Math.max(
+    50,
+    Math.ceil(Math.max(...bins.filter(numeric), 0) / 50) * 50,
+  );
+  svg.setAttribute("viewBox", "0 0 400 150");
+  let out = `<line x1="0" x2="400" y1="123" y2="123" stroke="#46504b"/><text x="0" y="13" fill="#a9b4ae" font-size="10">${ceiling} W</text>`;
+  bins.forEach((v, i) => {
+    if (v !== null) {
+      const height = Math.max((v / ceiling) * 95, 1);
+      out += `<rect x="${i * 8.3}" y="${123 - height}" width="5" height="${height}" rx="1" fill="#d6b584"/>`;
+    }
+  });
+  out += `<text x="0" y="147" fill="#99aaa6" font-size="10">${clock(start)}</text><text x="398" y="147" text-anchor="end" fill="#99aaa6" font-size="10">${clock(end)}</text>`;
+  if (!bins.some(numeric))
+    out +=
+      '<text x="200" y="75" text-anchor="middle" fill="#a9b4ae" font-size="12">表示期間内のデータがありません</text>';
+  svg.innerHTML = out;
+}
+function continuity(streams) {
+  const svg = $("continuityChart"),
+    { start, end } = plotWindow();
+  svg.setAttribute("viewBox", "0 0 600 115");
+  const x = (t) => 82 + ((t - start) / (end - start)) * 508;
+  let out = "";
+  for (const [i, key] of ["cpu", "board", "activity"].entries()) {
+    const y = 12 + i * 29,
+      rows = recent(streams[key].history);
+    let first = null,
+      prev = null;
+    out += `<text x="0" y="${y + 9}" fill="#b3c5d6" font-size="11">${["CPU", "BOARD", "GPU / OS"][i]}</text><rect x="82" y="${y}" width="508" height="11" rx="2" fill="#27343f"/>`;
+    const segment = () => {
+      if (first !== null)
+        out += `<rect x="${x(first)}" y="${y}" width="${Math.max(2, x(prev.t) - x(first))}" height="11" rx="2" fill="${["#a4ddc4", "#cfb795", "#94b9e9"][i]}"/>`;
+    };
+    for (const r of rows) {
+      const t = Date.parse(r.time);
+      if (
+        !prev ||
+        t - prev.t > 6000 ||
+        t < prev.t ||
+        r.session !== prev.session
+      ) {
+        segment();
+        first = t;
+      }
+      prev = { t, session: r.session };
+    }
+    segment();
+  }
+  out += `<text x="82" y="110" fill="#a4b4c2" font-size="10">${clock(start)}</text><text x="590" y="110" text-anchor="end" fill="#a4b4c2" font-size="10">${clock(end)}</text>`;
+  svg.innerHTML = out;
+}
 function chart(id, series, min, max) {
   const svg = $(id),
     w = 640,
@@ -37,9 +176,9 @@ function chart(id, series, min, max) {
     top = 15,
     bottom = 28;
   svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  const end = Date.now(),
-    start = end - Number($("range").value) * 1000;
-  let out = "";
+  const { start, end } = plotWindow();
+  let out =
+    '<defs><linearGradient id="thermalFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9ce4b7" stop-opacity=".22"/><stop offset="100%" stop-color="#9ce4b7" stop-opacity="0"/></linearGradient></defs>';
   for (let i = 0; i < 5; i++) {
     let val = min + ((max - min) * i) / 4,
       y = h - bottom - ((h - top - bottom) * i) / 4;
@@ -53,6 +192,8 @@ function chart(id, series, min, max) {
   let count = 0;
   for (const s of series) {
     let path = "",
+      segments = [],
+      segment = [],
       prev = null;
     for (const r of s.rows) {
       const t = Date.parse(r.time),
@@ -63,16 +204,29 @@ function chart(id, series, min, max) {
         typeof v !== "number" ||
         !Number.isFinite(v)
       ) {
+        if (segment.length) segments.push(segment);
+        segment = [];
         prev = null;
         continue;
       }
       const x = left + ((t - start) / (end - start)) * (w - left - right),
         y = top + ((max - v) / (max - min)) * (h - top - bottom);
       const fresh = prev && t - prev.t <= 6000 && prev.session === r.session;
+      if (!fresh && segment.length) {
+        segments.push(segment);
+        segment = [];
+      }
+      segment.push([x, Math.max(top, Math.min(h - bottom, y))]);
       path += `${fresh ? "L" : "M"}${x.toFixed(1)},${Math.max(top, Math.min(h - bottom, y)).toFixed(1)} `;
       prev = { t, session: r.session };
       count++;
     }
+    if (segment.length) segments.push(segment);
+    if (s.key === "cpuTemp")
+      for (const points of segments) {
+        if (points.length < 2) continue;
+        out += `<path d="M${points[0][0]},${h - bottom} ${points.map((p) => "L" + p.join(",")).join(" ")} L${points.at(-1)[0]},${h - bottom} Z" fill="url(#thermalFill)"/>`;
+      }
     out += `<path d="${path}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
   }
   if (!count)
@@ -107,9 +261,6 @@ function render() {
     ["cpuTemp", "cpu", 1],
     ["gpuTemp", "activity", 1],
     ["gpuPower", "activity", 1],
-    ["v12", "board", 3],
-    ["v5", "board", 3],
-    ["v33", "board", 3],
   ]) {
     $(id).textContent = fmt(latest(key)[id], dec);
     $(id).style.color = s[key].state === "recording" ? "" : "#f6c472";
@@ -117,26 +268,15 @@ function render() {
   chart(
     "tempChart",
     [
-      { rows: s.cpu.history, key: "cpuTemp", color: "#67dbc0" },
-      { rows: s.activity.history, key: "gpuTemp", color: "#7ca9ff" },
+      { rows: s.cpu.history, key: "cpuTemp", color: "#b6efcc" },
+      { rows: s.activity.history, key: "gpuTemp", color: "#8ebeff" },
     ],
     0,
     110,
   );
-  const rail = $("rail").value,
-    nom = { v12: 12, v5: 5, v33: 3.3 }[rail];
-  const vals = s.board.history
-    .filter(
-      (r) => Date.parse(r.time) > Date.now() - Number($("range").value) * 1000,
-    )
-    .map((r) => r[rail])
-    .filter((v) => typeof v === "number" && Number.isFinite(v));
-  chart(
-    "voltChart",
-    [{ rows: s.board.history, key: rail, color: "#f6c472" }],
-    Math.min(nom * 0.95, ...vals),
-    Math.max(nom * 1.05, ...vals),
-  );
+  voltageInstruments(s.board);
+  powerBars(s.activity.history);
+  continuity(s);
   const gpu = latest("activity").gpu || {};
   $("reasons").replaceChildren();
   for (const [label, flag, counter] of [
@@ -149,12 +289,28 @@ function render() {
       v = gpu[flag],
       n = gpu[counter];
     row.append(
-      el("span", label),
+      el("span", label, "reason-label"),
       el(
         "span",
-        `${v === "Active" ? "作動中" : v === "Not Active" ? "非作動" : "取得不可"} / ${n != null ? (Number(n) / 1e6).toFixed(6) + " 秒" : "—"}`,
+        s.activity.state !== "recording"
+          ? "更新停止 / 最終状態"
+          : v === "Active"
+            ? "作動中"
+            : v === "Not Active"
+              ? "非作動"
+              : "取得不可",
+        "reason-state",
+      ),
+      el(
+        "span",
+        `累積 ${n != null && Number.isFinite(Number(n)) ? (Number(n) / 1e6).toFixed(6) + " 秒" : "—"}`,
         "counter",
       ),
+    );
+    row.classList.toggle("active", v === "Active");
+    row.classList.toggle(
+      "unknown",
+      s.activity.state !== "recording" || !["Active", "Not Active"].includes(v),
     );
     $("reasons").append(row);
   }
@@ -183,6 +339,9 @@ function render() {
   }
   for (const text of issues.slice(-15))
     $("issues").append(el("p", text, "muted"));
+  $("gapCount").textContent = issues.length
+    ? `${issues.length} 件の確認項目`
+    : "取得済み区間に欠測なし";
   if (!issues.length)
     $("issues").append(
       el("div", "取得済み区間に該当する問題はありません", "empty"),
@@ -247,7 +406,6 @@ async function refresh() {
   }
 }
 $("range").onchange = render;
-$("rail").onchange = render;
 $("filter").oninput = render;
 $("export").onclick = async () => {
   try {

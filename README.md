@@ -21,6 +21,8 @@ Extract the `pc-diagnostics-windows` artifact from a successful Actions run and 
 
 ## Log sources
 
+The overview uses a thermal area/line plot, voltage deviation instruments, binned GPU power maxima and recording-continuity lanes. Voltage scales show ±5% around the named reference, with overflow arrows; this is a display scale, not a pass/fail test. Missing samples remain gaps. The common time selector applies to all history views. Run `node --test scripts/Test-Visualizations.cjs` to check these data semantics.
+
 The viewer reads existing JSONL logs. It does not install drivers or start another hardware poller. Use **Settings** to select existing sensor and activity log directories. Configuration is stored locally at `%LOCALAPPDATA%\PCDiagnostics\sources.json`.
 
 | Stream | Filename | Lifetime |

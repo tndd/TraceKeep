@@ -8,6 +8,14 @@
   --green: #50decd;
   --amber: #ffc078;
 }
+.mobile-settings {
+  display: none;
+}
+@media (max-width: 760px) {
+  .mobile-settings {
+    display: block;
+  }
+}
 * {
   box-sizing: border-box;
 }

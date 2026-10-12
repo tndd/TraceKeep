@@ -188,6 +188,8 @@ function render() {
     );
   const filter = $("filter").value.toLowerCase();
   $("sensors").replaceChildren();
+  $("sensorCount").textContent =
+    (s.board.latest?.sensors?.length || 0) + " CHANNELS / RAW DATA";
   for (const r of s.board.latest?.sensors || []) {
     if (!(r.name + " " + r.id).toLowerCase().includes(filter)) continue;
     const tr = el("tr");
@@ -230,7 +232,7 @@ async function refresh() {
     }
     render();
     if (data.preview) {
-      $("overall").textContent = "開発プレビュー / 保存時点のデータ";
+      $("overall").textContent = "開発プレビュー / 模擬データ";
       $("banner").classList.add("preview");
     } else {
       $("banner").classList.remove("preview");
@@ -262,6 +264,7 @@ $("settings").onclick = () => {
   }
   $("settingsDialog").showModal();
 };
+$("settingsMobile").onclick = $("settings").onclick;
 $("closeSettings").onclick = () => $("settingsDialog").close();
 $("saveSettings").onclick = async () => {
   try {

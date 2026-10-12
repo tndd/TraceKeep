@@ -9,6 +9,10 @@ rust-version = "1.85"
 name = "diagnostics_core"
 path = "src/lib.rs"
 
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

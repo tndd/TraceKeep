@@ -36,6 +36,9 @@
         <button class="primary" id="export">
           <span>↓</span> スナップショットを保存
         </button>
+        <button id="settingsMobile" class="mobile-settings">
+          設定 / ログの参照先
+        </button>
       </header>
       <div class="banner" id="banner" role="status">
         <div class="status-light"></div>
@@ -165,7 +168,7 @@
       </div>
       <details class="panel hardware">
         <summary>
-          マザーボードの生データ <span>37 CHANNELS / NUVOTON NCT6687D</span>
+          マザーボードの生データ <span id="sensorCount">SENSOR CHANNELS</span>
         </summary>
         <div class="panelhead">
           <p class="muted">センサーIDを維持して記録します。</p>

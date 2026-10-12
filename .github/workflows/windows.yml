@@ -15,9 +15,17 @@ jobs:
         run: rustup toolchain install stable --profile minimal
       - name: JavaScript syntax
         run: node --check ui/app.js
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: windows-rust-${{ hashFiles('src-tauri/Cargo.toml', 'src-tauri/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: windows-rust-
       - name: Rust tests
         working-directory: src-tauri
-        run: cargo +stable test
+        run: cargo +stable test --release
       - name: Build desktop executable
         working-directory: src-tauri
         run: cargo +stable build --release

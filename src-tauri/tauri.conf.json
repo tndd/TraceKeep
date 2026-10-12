@@ -6,8 +6,20 @@
   "build": { "frontendDist": "../ui" },
   "app": {
     "withGlobalTauri": true,
-    "windows": [{ "label": "main", "title": "PC Diagnostics", "width": 1320, "height": 900, "minWidth": 720, "minHeight": 600, "backgroundColor": "#080e19" }],
-    "security": { "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'" }
+    "windows": [
+      {
+        "label": "main",
+        "title": "PC Diagnostics",
+        "width": 1320,
+        "height": 900,
+        "minWidth": 720,
+        "minHeight": 600,
+        "backgroundColor": "#080e19"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost; object-src 'none'; base-uri 'self'"
+    }
   },
   "bundle": { "active": false }
 }

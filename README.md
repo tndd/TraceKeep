@@ -17,6 +17,8 @@ cargo build --release
 
 Windows CI runs Rust tests and builds a portable executable. The executable requires the WebView2 runtime installed on Windows. It is not code-signed in this development release.
 
+Extract the `pc-diagnostics-windows` artifact from a successful Actions run and open `target/release/pc-diagnostics.exe`. The first launch can be configured in Settings; no administrator privileges are needed for the viewer. `scripts/Start-Desktop.ps1` also accepts an extracted executable via `-ExecutablePath`.
+
 ## Log sources
 
 The viewer reads existing JSONL logs. It does not install drivers or start another hardware poller. Use **Settings** to select existing sensor and activity log directories. Configuration is stored locally at `%LOCALAPPDATA%\PCDiagnostics\sources.json`.
@@ -29,6 +31,8 @@ The viewer reads existing JSONL logs. It does not install drivers or start anoth
 | Windows events | `events-YYYYMMDD.jsonl` | Existing login recorder |
 
 The `collectors/` directory contains the PowerShell source used by these independent recorders. CPU and board reading uses LibreHardwareMonitor and PawnIO; GPU reading uses NVIDIA's installed `nvidia-smi`. Those third-party binaries are not redistributed here. Deploying new collector code over an existing installation needs an explicit migration; do not run a second collector alongside the installed version.
+
+The auxiliary collector also acquires the legacy per-user mutex, so it exits when the installed first-generation recorder already owns it. The existing installation is not overwritten by opening or building the GUI.
 
 ## Diagnostic limits
 

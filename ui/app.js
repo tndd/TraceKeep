@@ -87,6 +87,7 @@ function render() {
   $("overall").textContent = bad.length
     ? bad.map((k) => names[k]).join("・") + "の記録を確認してください"
     : "3系統のログが更新されています";
+  if (data.preview) $("overall").textContent = "開発プレビュー / 模擬データ";
   $("updated").textContent = "取得 " + clock(data.time) + " JST";
   $("streams").replaceChildren();
   for (const k of Object.keys(names)) {

@@ -5,6 +5,8 @@ $root = Join-Path $PSScriptRoot 'sensor-logs'
 [void][IO.Directory]::CreateDirectory($root)
 $mutex = [Threading.Mutex]::new($false, 'Local\PCDiagnostics-Activity-v1')
 $locked = $false
+$legacyMutex = [Threading.Mutex]::new($false, ('Local\CodexPCDiagnostics-' + $env:USERNAME + '-20261010'))
+$legacyLocked = $false
 $writers = @{}
 $utf8 = [Text.UTF8Encoding]::new($false)
 function Write-DurableLine([string]$kind, [string]$line) {
@@ -29,6 +31,9 @@ function Write-Record([string]$kind, $record) {
 try {
     try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
     if (-not $locked) { exit 0 }
+    # Coordinate with the installed first-generation recorder during migration.
+    try { $legacyLocked = $legacyMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $legacyLocked = $true }
+    if (-not $legacyLocked) { exit 0 }
     if (Test-Path -LiteralPath (Join-Path $root 'STOP')) { exit 0 }
     $session = [guid]::NewGuid().ToString()
     $gpuExe = Get-ChildItem -Path 'C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
@@ -100,4 +105,6 @@ try {
     foreach ($writer in $writers.Values) { $writer.Dispose() }
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
+    if ($legacyLocked) { $legacyMutex.ReleaseMutex() }
+    $legacyMutex.Dispose()
 }

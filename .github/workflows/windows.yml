@@ -1,0 +1,30 @@
+name: Windows desktop
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Stable Rust
+        run: rustup update stable --profile minimal
+      - name: JavaScript syntax
+        run: node --check ui/app.js
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo +stable test
+      - name: Build desktop executable
+        working-directory: src-tauri
+        run: cargo +stable build --release
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pc-diagnostics-windows
+          path: |
+            src-tauri/target/release/pc-diagnostics.exe
+            src-tauri/Cargo.lock
+          if-no-files-found: error

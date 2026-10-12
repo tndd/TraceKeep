@@ -1,0 +1,103 @@
+param([int]$MaxSamples = 0)
+$ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Read-NvidiaDiagnostics.ps1')
+$root = Join-Path $PSScriptRoot 'sensor-logs'
+[void][IO.Directory]::CreateDirectory($root)
+$mutex = [Threading.Mutex]::new($false, 'Local\PCDiagnostics-Activity-v1')
+$locked = $false
+$writers = @{}
+$utf8 = [Text.UTF8Encoding]::new($false)
+function Write-DurableLine([string]$kind, [string]$line) {
+    $day = Get-Date -Format 'yyyyMMdd'
+    $key = "$kind-$day"
+    if (-not $writers.ContainsKey($key)) {
+        foreach ($old in @($writers.Keys | Where-Object { $_ -like "$kind-*" })) {
+            $writers[$old].Dispose()
+            $writers.Remove($old)
+        }
+        $path = Join-Path $root "$key.jsonl"
+        $stream = [IO.FileStream]::new($path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
+        $writers[$key] = [IO.StreamWriter]::new($stream, $utf8)
+    }
+    $writers[$key].WriteLine($line)
+    $writers[$key].Flush()
+    $writers[$key].BaseStream.Flush($true)
+}
+function Write-Record([string]$kind, $record) {
+    Write-DurableLine $kind ($record | ConvertTo-Json -Compress -Depth 8)
+}
+try {
+    try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
+    if (-not $locked) { exit 0 }
+    if (Test-Path -LiteralPath (Join-Path $root 'STOP')) { exit 0 }
+    $session = [guid]::NewGuid().ToString()
+    $gpuExe = Get-ChildItem -Path 'C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+    $os = Get-CimInstance Win32_OperatingSystem
+    Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=2; lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; note='CPU temperature is recorded independently in C:\Program Files\CodexPCDiagnostics\sensor-logs. No AC or PSU temperature measurements are available here.'})
+    $lastEventTime = (Get-Date).AddMinutes(-5)
+    $lastEventId = 0L
+    $nextEvents = Get-Date
+    $nextSizeCheck = (Get-Date).AddMinutes(1)
+    $memory = $null
+    $iteration = 0
+    $sizeWarningSent = $false
+    while (-not (Test-Path -LiteralPath (Join-Path $root 'STOP'))) {
+        $timer = [Diagnostics.Stopwatch]::StartNew()
+        $now = [DateTimeOffset]::Now
+        $record = [ordered]@{time=$now.ToString('o'); session=$session; sequence=$iteration; cpuLoadPercent=$null; availableMemoryMB=$null; committedMemoryPercent=$null; diskReadBytesPerSecond=$null; diskWriteBytesPerSecond=$null; diskQueueLength=$null; gpu=$null; errors=@()}
+        try {
+            $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
+            $record.cpuLoadPercent = $cpu.PercentProcessorTime
+            if ($iteration % 5 -eq 0) { $memory = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory }
+            $record.availableMemoryMB = $memory.AvailableMBytes
+            $record.committedMemoryPercent = $memory.PercentCommittedBytesInUse
+            $disk = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"
+            $record.diskReadBytesPerSecond = $disk.DiskReadBytesPersec
+            $record.diskWriteBytesPerSecond = $disk.DiskWriteBytesPersec
+            $record.diskQueueLength = $disk.CurrentDiskQueueLength
+        } catch { $record.errors += $_.Exception.Message }
+        if ($gpuExe) {
+            try {
+                $record.gpu = @(Read-NvidiaDiagnostics -Executable $gpuExe)
+                $record.gpuSampleTime = [DateTimeOffset]::Now.ToString('o')
+            } catch { $record.errors += $_.Exception.Message }
+        }
+        $record.sampleDurationMs = $timer.ElapsedMilliseconds
+        Write-Record 'activity' $record
+        if ((Get-Date) -ge $nextEvents) {
+            try {
+                $events = @(Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=$lastEventTime} -ErrorAction Stop | Where-Object { $_.RecordId -gt $lastEventId } | Sort-Object RecordId)
+                foreach ($event in $events) {
+                    if ($event.Level -le 3 -or $event.ProviderName -match 'Kernel-Power|Kernel-Boot|Kernel-Processor-Power|WHEA|MemoryDiagnostics|User32|EventLog|volmgr|stornvme|disk|Ntfs') {
+                        Write-Record 'events' ([ordered]@{time=$event.TimeCreated.ToString('o'); session=$session; recordId=$event.RecordId; provider=$event.ProviderName; id=$event.Id; level=$event.Level; xml=$event.ToXml()})
+                    }
+                    $lastEventId = [long]$event.RecordId
+                }
+                if ($events.Count -gt 0) { $lastEventTime = $events[-1].TimeCreated.AddSeconds(-1) }
+            } catch {
+                if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { Write-Record 'errors' @{time=[DateTimeOffset]::Now.ToString('o'); error=$_.Exception.Message} }
+            }
+            $nextEvents = (Get-Date).AddSeconds(15)
+        }
+        if ((Get-Date) -ge $nextSizeCheck) {
+            $total = (Get-ChildItem -LiteralPath $root -Filter '*.jsonl' | Measure-Object Length -Sum).Sum
+            if ($total -ge 2GB -and -not $sizeWarningSent) {
+                Write-Record 'sessions' @{time=[DateTimeOffset]::Now.ToString('o'); session=$session; status='Logs exceed 2 GiB; logging continues, no files deleted'; bytes=$total}
+                $sizeWarningSent = $true
+            }
+            $nextSizeCheck = (Get-Date).AddMinutes(1)
+        }
+        $iteration++
+        if ($MaxSamples -gt 0 -and $iteration -ge $MaxSamples) { break }
+        $delay = [Math]::Max(1, 2000 - [int]$timer.ElapsedMilliseconds)
+        Start-Sleep -Milliseconds $delay
+    }
+    Write-Record 'sessions' @{time=[DateTimeOffset]::Now.ToString('o'); session=$session; status='Stopped normally'; samples=$iteration}
+} catch {
+    try { Write-Record 'errors' @{time=[DateTimeOffset]::Now.ToString('o'); error=$_.Exception.ToString()} } catch {}
+    exit 1
+} finally {
+    foreach ($writer in $writers.Values) { $writer.Dispose() }
+    if ($locked) { $mutex.ReleaseMutex() }
+    $mutex.Dispose()
+}

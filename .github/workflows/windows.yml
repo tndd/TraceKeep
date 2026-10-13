@@ -18,6 +18,7 @@ jobs:
           node --check ui/app.js
           node --check ui/mini.js
           node --check ui/mini-model.js
+          node --check ui/temperature-gauge.js
       - name: Visualization data integrity
         run: node --test scripts/Test-Visualizations.cjs
       - name: Mini monitor state integrity

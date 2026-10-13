@@ -7,3 +7,7 @@ test('stale coordinator overrides old worker green state',()=>{const d=sample();
 
 test('five lamps remain visible when workers disappear',()=>{const m=model({});assert.equal(m.workers.length,5);assert.ok(m.workers.every(w=>w.displayState==='unknown'));});
 test('fresh coordinator cannot hide stale sensor logs',()=>{const d=sample();d.streams.cpu.state='stale';assert.equal(model(d).workers[0].displayState,'stale');assert.equal(model(d).cpu.fresh,false);});
+
+const gauge=require('../ui/temperature-gauge.js');
+test('gauge colors depend only on temperature, with independent CPU/GPU anchors',()=>{assert.equal(gauge.reading(62,true,'cpu').color,'rgb(67,237,152)');assert.equal(gauge.reading(85,true,'cpu').color,'rgb(255,210,85)');assert.equal(gauge.reading(95,true,'cpu').color,'rgb(255,92,104)');assert.equal(gauge.reading(75,true,'gpu').color,'rgb(255,210,85)');assert.equal(gauge.reading(90,true,'gpu').color,'rgb(255,92,104)');assert.notEqual(gauge.reading(80,true,'cpu').color,gauge.reading(80,true,'gpu').color);});
+test('unavailable readings never produce a colored temperature arc',()=>{for(const value of [null,undefined,NaN,Infinity,-1,151])assert.equal(gauge.reading(value,true,'cpu').available,false);assert.equal(gauge.reading(95,false,'cpu').fraction,0);assert.equal(gauge.reading(0,true,'cpu').available,true);assert.equal(gauge.reading(110,true,'cpu').fraction,1);});

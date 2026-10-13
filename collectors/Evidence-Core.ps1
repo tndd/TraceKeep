@@ -1,7 +1,7 @@
 $script:EvidenceUtf8=[Text.UTF8Encoding]::new($false)
 $script:EvidenceCollectorDirectory=$PSScriptRoot
 function Test-EvidenceReady($row,[DateTimeOffset]$since) {
-    return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0
+    return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and ($row.eventsStatus -eq 'disabled' -or @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0)
 }
 function Save-EvidenceJson($path,$value) {
     $temp=$path+'.tmp'
@@ -31,6 +31,8 @@ function Get-EvidenceCursor($stateRoot,$channel) {
 function Get-EvidenceXPath($channel,$cursor,[long]$latestId,[DateTimeOffset]$now) {
     $selection=if($channel -eq 'System'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Kernel-Processor-Power'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='EventLog'] or Provider[@Name='User32'] or Provider[@Name='volmgr'] or Provider[@Name='disk'] or Provider[@Name='stornvme'] or Provider[@Name='Ntfs'])"}elseif($channel -eq 'Application'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Windows Error Reporting'])"}elseif($channel -like '*WHEA*'){'(EventRecordID >= 0)'}else{'(Level=1 or Level=2 or Level=3)'}
     # Query through a fixed watermark. Record IDs rather than wall time survive clock changes.
+    # Collect every level from the selected diagnostic channels, including context before a failure.
+    $selection='(EventRecordID >= 0)'
     if($cursor -and [long]$cursor.recordId -le $latestId){$position='EventRecordID > '+[long]$cursor.recordId}
     else {$position="TimeCreated[@SystemTime >= '"+$now.UtcDateTime.AddDays(-7).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']"}
     return '*[System['+$selection+' and ('+$position+') and EventRecordID <= '+$latestId+']]'
@@ -103,17 +105,20 @@ function Get-MachineEvidence {
     }
     return $result
 }
-function Get-StorageEvidence {
+function Get-StorageEvidence($Config=$null) {
     $items=@();$errors=@()
     try {
-        foreach($disk in @(Get-PhysicalDisk -ErrorAction Stop)){
+        foreach($disk in $(if(-not $Config -or $Config.modules.storage.enabled){@(Get-PhysicalDisk -ErrorAction Stop)}else{@()})){
             $counter=$null;$error=$null
             try {$counter=$disk|Get-StorageReliabilityCounter -ErrorAction Stop|Select-Object Temperature,TemperatureMax,Wear,PowerOnHours,ReadErrorsTotal,ReadErrorsUncorrected,WriteErrorsTotal,WriteErrorsUncorrected,ReadLatencyMax,WriteLatencyMax,FlushLatencyMax}catch{$error=$_.Exception.Message}
             $items+=@{deviceId=$disk.DeviceId;name=$disk.FriendlyName;busType=[string]$disk.BusType;health=[string]$disk.HealthStatus;operational=@($disk.OperationalStatus|ForEach-Object {[string]$_});size=$disk.Size;reliability=$counter;error=$error}
         }
     }catch{$errors+=$_.Exception.Message}
     $nvme=$null
-    try {. (Join-Path $script:EvidenceCollectorDirectory 'Read-NvmeHealth.ps1');$nvme=Get-NvmeHealthEvidence}catch{$errors+=('NVMe reader: '+$_.Exception.Message)}
+    try {
+        . (Join-Path $script:EvidenceCollectorDirectory 'Read-NvmeHealth.ps1')
+        if(-not $Config){$nvme=Get-NvmeHealthEvidence}elseif($Config.modules.nvme.enabled -or $Config.modules.nvmeErrors.enabled){$nvme=Get-NvmeHealthEvidence -IncludeHealth $Config.modules.nvme.enabled -IncludeErrors $Config.modules.nvmeErrors.enabled}else{$nvme=@{status='disabled';disks=@();errors=@()}}
+    }catch{$errors+=('NVMe reader: '+$_.Exception.Message)}
     return @{time=[DateTimeOffset]::Now.ToString('o');disks=$items;nvme=$nvme;errors=$errors;note='Windows reliability and direct NVMe SMART counters. Null/unsupported is not zero or healthy. Lifetime counters do not date or attribute a failure.'}
 }
 function Get-BootEvidenceXPath($bootTime) {
@@ -142,7 +147,7 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     Save-EvidenceJson (Join-Path $dest 'crash-configuration.json') $crash
     foreach($name in @('machine-inventory.json','recorder-settings.json')){if(Test-Path -LiteralPath (Join-Path $dataRoot $name)){Copy-Item -LiteralPath (Join-Path $dataRoot $name) -Destination (Join-Path $dest $name) -Force}}
     Save-EvidenceJson (Join-Path $dest 'boot-events.json') @($events|ForEach-Object {@{time=$_.TimeCreated.ToString('o');channel='System';recordId=$_.RecordId;provider=$_.ProviderName;id=$_.Id;xml=$_.ToXml()}})
-    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-')){
+    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-')){
         foreach($file in @(Get-ChildItem -LiteralPath $logRoot -Filter ($prefix+'*.jsonl')|Sort-Object Name -Descending|Select-Object -First 2)){
             try {$copied+=Copy-EvidenceTail $file.FullName (Join-Path $dest $file.Name)}catch{$errors+=$_.Exception.Message}
         }

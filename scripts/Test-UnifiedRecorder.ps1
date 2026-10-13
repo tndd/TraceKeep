@@ -5,11 +5,13 @@ $dataRoot=Join-Path $testRoot 'data'
 $logRoot=Join-Path $dataRoot 'logs'
 $utf8=[Text.UTF8Encoding]::new($false)
 foreach($dir in @('management','collectors','data\logs')){[void][IO.Directory]::CreateDirectory((Join-Path $testRoot $dir))}
+Copy-Item (Join-Path $repo 'collectors\Collection-Settings.ps1') (Join-Path $testRoot 'collectors\Collection-Settings.ps1')
+$codeRoot=$testRoot
 # Isolate the test's mutex. Never run a hardware collector in this test.
 $source=Get-Content (Join-Path $repo 'management\Run-Recorder.ps1') -Raw
 $source=$source.Replace('Global\PCDiagnostics-Coordinator-v1',('Local\PCDiagnostics-Test-'+[guid]::NewGuid().ToString('N')))
 [IO.File]::WriteAllText((Join-Path $testRoot 'management\Run-Recorder.ps1'),$source,$utf8)
-foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-MotherboardLogging.ps1','board-auto'),@('Start-ContinuousDiagnostics.ps1','activity'),@('Start-EvidenceLogging.ps1','evidence'))){
+foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-MotherboardLogging.ps1','board-auto'),@('Start-ContinuousDiagnostics.ps1','activity'),@('Start-EvidenceLogging.ps1','evidence'),@('Start-ExtendedLogging.ps1','extended'))){
     $fake=@'
 param([string]$LogRoot,[string]$LibraryDirectory,[int]$IntervalMilliseconds)
 $path=Join-Path $LogRoot ('PREFIX-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
@@ -24,12 +26,23 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 4}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
+    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 5}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     [IO.File]::WriteAllText((Join-Path $dataRoot 'STOP-ALL'),'test stop',$utf8)
     if(-not $proc.WaitForExit(15000)){throw 'Supervisor did not stop'}
     if($proc.ExitCode -ne 0){throw ('Supervisor failed: '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     foreach($prefix in @('cpu-auto','board-auto','activity','evidence')){if(@(Get-Content (Join-Path $logRoot ($prefix+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))).Count -lt 2){throw "Missing restarted samples: $prefix"}}
+    . (Join-Path $testRoot 'collectors\Collection-Settings.ps1')
+    $disabled=Get-CollectionDefaults;$disabled.modules.cpu.enabled=$false
+    [IO.File]::WriteAllText((Join-Path $dataRoot 'collection-settings.json'),($disabled|ConvertTo-Json -Depth 6),$utf8)
+    $cpuFile=Join-Path $logRoot ('cpu-auto-'+(Get-Date -Format yyyyMMdd)+'.jsonl');$cpuHash=(Get-FileHash $cpuFile).Hash
+    Remove-Item -LiteralPath (Join-Path $dataRoot 'STOP-ALL')
+    $proc.Dispose();$proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+(Join-Path $testRoot 'management\Run-Recorder.ps1')+'" -DataRoot "'+$dataRoot+'"') -WindowStyle Hidden -PassThru
+    $null=$proc.Handle;Start-Sleep -Seconds 4
+    $state=Get-Content (Join-Path $dataRoot 'runtime.json') -Raw|ConvertFrom-Json;$cpuWorker=$state.workers|Where-Object name -EQ 'cpu'
+    if($cpuWorker.state -ne 'disabled' -or $cpuWorker.pid -or (Get-FileHash $cpuFile).Hash -ne $cpuHash){throw 'Disabled sensor worker still launched or changed logs'}
+    [IO.File]::WriteAllText((Join-Path $dataRoot 'STOP-ALL'),'test stop',$utf8);if(-not $proc.WaitForExit(15000)){throw 'Disabled worker simulation did not stop'}
+    Remove-Item -LiteralPath (Join-Path $dataRoot 'collection-settings.json')
     # Extract only this verification function; never execute the migration script body.
     $tokens=$null;$errors=$null;$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'management\Manage-Recorder.ps1'),[ref]$tokens,[ref]$errors)
     if($errors.Count){throw 'Management script parse failed'}

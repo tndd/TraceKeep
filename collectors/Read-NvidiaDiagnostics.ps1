@@ -1,5 +1,5 @@
 function Invoke-DiagnosticProcess {
-    param([string]$Executable, [string]$Arguments, [int]$TimeoutMilliseconds = 1500)
+    param([string]$Executable, [string]$Arguments, [int]$TimeoutMilliseconds = 1500, [Text.Encoding]$OutputEncoding=$null)
     $process = [Diagnostics.Process]::new()
     $process.StartInfo.FileName = $Executable
     $process.StartInfo.Arguments = $Arguments
@@ -7,6 +7,7 @@ function Invoke-DiagnosticProcess {
     $process.StartInfo.CreateNoWindow = $true
     $process.StartInfo.RedirectStandardOutput = $true
     $process.StartInfo.RedirectStandardError = $true
+    if($OutputEncoding){$process.StartInfo.StandardOutputEncoding=$OutputEncoding;$process.StartInfo.StandardErrorEncoding=$OutputEncoding}
     try {
         if (-not $process.Start()) { throw 'Diagnostic process did not start.' }
         $stdout = $process.StandardOutput.ReadToEndAsync()

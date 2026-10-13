@@ -2,6 +2,16 @@
 
 A **CUI-first Windows recorder** for investigating unexpected power loss. The Rust `pcdiag` command controls one boot task with isolated CPU, motherboard and GPU/Windows workers. Tauri is an optional viewer of the same logs.
 
+The extended recorder adds an isolated worker for detailed performance, processes, GPU XML, driver/device inventory, reliability history, power configuration and local dump/WER preservation. Every implemented diagnostic group is enabled by default and independently configurable. Read [collection controls, defaults and limits](docs/collection-settings.md) before changing capture policy.
+
+```powershell
+.\pcdiag.exe config show
+.\pcdiag.exe coverage
+.\pcdiag.exe config disable processes  # Administrator; keeps existing data
+.\pcdiag.exe config enable processes
+.\pcdiag.exe config interval performance 30
+```
+
 Recording needs no GUI, browser, Python server or logged-in user after migration. Closing either `pcdiag watch` or the optional GUI does not stop the boot task. Only an explicit administrative stop changes recording.
 
 ## Unified CUI
@@ -38,7 +48,7 @@ After installation:
 
 These four control commands require elevation. `stop` disables automatic starts until `start` is issued. `rollback` restores the old configuration and retains both sets of logs. Reinstallation over an existing migration is deliberately rejected. A rollback activity recovery task uses the original user's interactive, limited token; it never runs a user-writable script as SYSTEM.
 
-One SYSTEM task, **PC Diagnostics Recorder**, starts at boot. The coordinator monitors worker exits and log-file freshness. No writes for 120 seconds trigger an isolated worker restart. Repeated failures are limited to three restarts per ten minutes; other workers keep running. Coordinator events and a heartbeat explain recovery actions. This detects stalled recording, not hardware health. Boot configuration is installed, but a real reboot test remains a separate check.
+One SYSTEM task, **PC Diagnostics Recorder**, starts at boot. The coordinator monitors worker exits and log-file freshness. Stalled workers trigger an isolated restart after at least 120 seconds (270 seconds for the extended worker). Disabled workers are reported and never launched. Repeated failures are limited to three restarts per ten minutes; other workers keep running. Coordinator events and a heartbeat explain recovery actions. This detects stalled recording, not hardware health. Boot configuration is installed, but a real reboot test remains a separate check.
 
 Machine `sources.json` takes precedence for both CUI and GUI. Per-user GUI source overrides are disabled while unified recording is configured. The recorder orchestration and hardware workers currently use PowerShell; Rust owns CUI commands, log reading, health presentation and export. Sensor access still uses the existing library/driver and `nvidia-smi`.
 
@@ -78,15 +88,15 @@ The auxiliary collector also acquires the legacy per-user mutex, so it exits whe
 
 ## Evidence recorder
 
-The isolated evidence worker runs every 15 seconds. It stores the full XML of selected System/Application events and enabled WHEA/storage operational channels. Durable per-channel record-ID checkpoints survive recorder restarts and long downtime; first-time recovery is bounded to seven days. Each batch is capped at 2,000 selected events and drains remaining backlog on subsequent passes. A failed append never advances its checkpoint. An interrupted batch can replay records: deduplicate by channel, record ID and event time. Record-ID rollback or loss/replacement of the saved event-time anchor triggers bounded recovery and an explicit gap notice. Windows events already overwritten before recovery cannot be reconstructed.
+The isolated evidence worker runs every 15 seconds. It stores the full XML of System/Application events at every level and enabled diagnostic operational channels. Durable per-channel record-ID checkpoints survive recorder restarts and long downtime; first-time recovery is bounded to seven days. Each batch is capped at 2,000 selected events and drains remaining backlog on subsequent passes. A failed append never advances its checkpoint. An interrupted batch can replay records: deduplicate by channel, record ID and event time. Record-ID rollback or loss/replacement of the saved event-time anchor triggers bounded recovery and an explicit gap notice. Windows events already overwritten before recovery cannot be reconstructed.
 
 At worker startup and every five minutes it captures Windows-exposed storage reliability counters, direct NVMe SMART/health, crash-dump settings, page-file allocation, local-volume free space and dump metadata. Unsupported fields are null, and access failures are retained explicitly. NVMe health uses the built-in Windows storage-property query with no new driver or device configuration changes. Controller lifetime counters include unsafe shutdowns, power cycles, media errors, error-log count and temperature warning duration. Full 512-byte health pages are retained as Base64; unsigned 128-bit counters are decimal strings to avoid loss of precision. These appear under `storage.nvme` in `pcdiag evidence`. A successful recorder heartbeat does not make an unavailable device query healthy: inspect each NVMe disk's `status` and `error`. Machine firmware/driver inventory is captured at worker startup without serial numbers. See [evidence coverage and limits](docs/evidence-coverage.md).
 
-After boot events settle for 90 seconds, one snapshot per OS boot is saved under `%ProgramData%\PCDiagnostics\incidents\boot-...`. It includes recent raw boot/failure events, crash configuration and bounded tails from the last two dates of each stream (8 MiB per file). The manifest records truncation, failures and SHA-256 hashes. Original logs remain intact; dumps are indexed, not copied. A snapshot without event 41/6008 is unclassified, not proof of clean shutdown. Late events remain in the continuous event archive; the snapshot is immutable. Sleep/resume does not create a new OS-boot snapshot.
+After boot events settle for 90 seconds, one snapshot per OS boot is saved under `%ProgramData%\PCDiagnostics\incidents\boot-...`. It includes recent raw boot/failure events, crash configuration and bounded tails from the last two dates of each stream (8 MiB per file). The manifest records truncation, failures and SHA-256 hashes. Original logs remain intact; dumps are independently preserved by the dumpArchive group. A snapshot without event 41/6008 is unclassified, not proof of clean shutdown. Late events remain in the continuous event archive; the snapshot is immutable. Sleep/resume does not create a new OS-boot snapshot.
 
 Sensor defaults remain 2,000 ms. An administrator can set per-stream `cpu`, `board` and `activity` values from 1,000 to 5,000 ms in `recorder-settings.json` under the data root using an `intervalMilliseconds` object, then restart the recorder. Event and storage intervals are independent. Poll duration is elapsed time, not CPU utilization; shorter intervals cannot capture PSU protection waveforms. Current verbose sensor JSON can consume about 0.8 GiB/day on the initial machine. No automatic deletion or compression is performed.
 
-To upgrade an active unified installation, extract the complete new package and run `management/Update-Recorder.ps1` once in Administrator PowerShell. It verifies the package's script checksums and syntax, backs up the installed scripts, stops recording briefly, and requires fresh sensor samples and successful System-event checkpointing. Failure restores the previous scripts and recording. It adds no drivers, changes no hardware controls and does not reboot. The checksum manifest detects package corruption; it is not a publisher signature.
+To upgrade an active unified installation, extract the complete new package and run `management/Update-Recorder.ps1` once in Administrator PowerShell. It verifies the package's script checksums and syntax, backs up the installed scripts, stops recording briefly, and requires fresh sensor samples and successful System-event checkpointing. Failure restores the previous scripts and recording. It adds no drivers, changes no hardware controls and does not reboot. With automaticDump enabled, it backs up Windows dump settings and configures automatic dumps and retention; these changes require the next normal reboot. The checksum manifest detects package corruption; it is not a publisher signature.
 
 ## Diagnostic limits
 

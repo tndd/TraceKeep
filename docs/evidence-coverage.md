@@ -9,7 +9,7 @@ The recorder gathers evidence for diagnosing a failure; it cannot guarantee prev
 | System/Application and enabled WHEA/storage channels | 15 seconds, checkpointed | Preserves selected raw XML with IDs, provider and timestamps. Windows may never commit the last event; already overwritten events cannot be recovered. Event 41 is a symptom. |
 | NVMe controller SMART log 0x02 | Startup and every 5 minutes | Unsafe shutdown, power cycle, media error and error-log counters persist across power cycles. Compare before/after on the same SSD; totals alone do not date incidents. Counter reset/replacement must not be interpreted as recovery. |
 | Windows storage reliability | Every 5 minutes | Separate OS-exposed counters; missing or failed fields are not zero. Historical maxima have no event timestamp. |
-| Dump configuration, pagefile, free space and dump inventory | Startup and every 5 minutes | Shows whether crash evidence is configured and whether a dump appeared. A full power cut prevents Windows writing a dump. Files are indexed, not copied/preserved against later overwrite. |
+| Dump configuration, pagefile, free space and dump inventory | Startup and every 5 minutes | Shows whether crash evidence is configured and whether a dump appeared. A full power cut prevents Windows writing a dump. The dumpArchive group preserves stable files subject to explicit limits. |
 | Recorder heartbeat, worker exits, monotonic clock and bounded boot snapshot | Continuously / per boot | Separates recorder failure from host failure where possible. Startup configuration still requires a real reboot test. Flushes reduce buffered loss but cannot guarantee the last SSD write survives power loss. |
 
 ## Direct NVMe query
@@ -18,7 +18,7 @@ The recorder gathers evidence for diagnosing a failure; it cannot guarantee prev
 
 Unsafe shutdown count increases when the controller loses power without its shutdown notification. This supports an unclean shutdown history but cannot distinguish AC interruption, PSU protection, motherboard power control, a forced reset or other causes. Media errors and error-log counts are distinct; neither zero count proves the SSD or power supply fault-free. Warning temperature duration can be zero if the controller has no applicable configured threshold, so zero is not a universal proof that overheating never happened.
 
-The raw error-information page is not currently collected. Its lifetime entry count is retained; retrieval/decoding of individual errors is a separate extension when that count changes. NVMe thermal-management extension fields after byte 215 are preserved in raw form but not decoded.
+The nvmeErrors group now reads Identify Controller capabilities and the supported error-entry array (log 0x01, up to 256 entries). Raw error bytes and decoded nonzero entries are retained. Entries have no wall-clock timestamps. NVMe thermal-management extension fields after byte 215 are preserved in raw form but not decoded.
 
 API references: [Windows NVMe queries](https://learn.microsoft.com/en-us/windows/win32/fileio/working-with-nvme-devices), [health page fields](https://learn.microsoft.com/en-us/windows/win32/api/nvme/ns-nvme-nvme_health_info_log), [retain asynchronous events](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntddstor/ns-ntddstor-storage_protocol_data_subvalue_get_log_page).
 
@@ -34,3 +34,5 @@ API references: [Windows NVMe queries](https://learn.microsoft.com/en-us/windows
 For external acquisition, the useful channels are AC input, DC rails, standby power, PS_ON# and PWR_OK. Their timing can help distinguish motherboard-requested shutdown from loss of valid PSU output, but a collapsing output alone does not distinguish an internal PSU fault from excessive downstream load/short circuit. A PC-powered USB logger alone can fail at the same instant as the PC. An ordinary slow wattmeter does not replace transient capture.
 
 The SF-L documentation lists electrical protections but does not document a software telemetry connection or a readable protection-trip history. This is a documented-interface limitation, not a claim that all PSUs lack telemetry. [Corsair SF-L manual](https://assets.corsair.com/image/upload/documents/49_002592_AB_WW_SFL_Series_QSG_Web_F.pdf), [Intel ATX design guide](https://www.intel.com/content/www/us/en/content-details/336521/atx-version-3-multi-rail-desktop-platform-power-supply-design-guide.html).
+
+The extended collection release implements process/performance/driver/device/power/reliability providers, default-on automatic dump configuration, dump/WER archives, disk-space warnings and independent opt-outs. See [current settings](collection-settings.md); historical recommendations above remain subject to capability and reboot validation.

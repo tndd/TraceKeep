@@ -22,6 +22,7 @@ function Protect-Directory($path){
     Set-Acl -LiteralPath $path -AclObject $acl
 }
 function Clear-Markers {
+    $extendedMarker=Join-Path $logRoot 'STOP-EXTENDED';if(Test-Path $extendedMarker){Remove-Item -LiteralPath $extendedMarker}
     foreach($path in @((Join-Path $dataRoot 'STOP-ALL'),(Join-Path $logRoot 'STOP-CPU'),(Join-Path $logRoot 'STOP-BOARD'),(Join-Path $logRoot 'STOP'),(Join-Path $logRoot 'STOP-EVIDENCE'))){if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
 }
 function Stop-Unified {
@@ -41,10 +42,14 @@ function Start-Unified {
     Start-ScheduledTask -TaskName $taskName
 }
 function Verify-Fresh([DateTimeOffset]$since,[int]$TimeoutSeconds=40){
+    . (Join-Path $codeRoot 'collectors\Collection-Settings.ps1')
+    $collection=Get-CollectionSettings $dataRoot
     $deadline=(Get-Date).AddSeconds($TimeoutSeconds)
     do {
         $ready=$true
         foreach($prefix in @('cpu-auto-','board-auto-','activity-')){
+            $module=if($prefix -eq 'cpu-auto-'){'cpu'}elseif($prefix -eq 'board-auto-'){'board'}else{'activity'}
+            if(-not $collection.modules[$module].enabled){continue}
             $file=Get-ChildItem -LiteralPath $logRoot -Filter ($prefix+'*.jsonl')|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
             $records=if($file){@(Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 5|ForEach-Object {try{$_|ConvertFrom-Json}catch{}})}else{@()}
             $fresh=@($records|Where-Object {$_.time -and ([DateTimeOffset]$_.time) -ge $since})
@@ -60,6 +65,8 @@ function Verify-Fresh([DateTimeOffset]$since,[int]$TimeoutSeconds=40){
 }
 function Restore-Legacy($state){
     Stop-Unified
+    $policy=Join-Path $codeRoot 'management\CrashDump-Policy.ps1'
+    if(Test-Path $policy){. (Join-Path $codeRoot 'collectors\Evidence-Core.ps1');. $policy;Restore-DiagnosticDumps $dataRoot|Out-Null}
     if(Test-Path (Join-Path $dataRoot 'sources.json')){Move-Item -LiteralPath (Join-Path $dataRoot 'sources.json') -Destination (Join-Path $dataRoot 'sources.inactive.json') -Force}
     foreach($old in $state.tasks){
         Register-ScheduledTask -TaskName $old.name -Xml (Get-Content -Encoding UTF8 -LiteralPath $old.xml -Raw) -Force|Out-Null
@@ -101,7 +108,7 @@ $activityScript=Join-Path (Split-Path $LegacyActivityRoot) 'Start-ContinuousDiag
 if(-not(Test-Path -LiteralPath $activityScript)){throw 'Legacy activity recorder script was not found beside the log directory.'}
 if(-not(Test-Path (Join-Path $oldRoot 'library\LibreHardwareMonitorLib.dll'))){throw 'Existing protected sensor library was not found. No driver or library will be downloaded.'}
 $package=Split-Path $PSScriptRoot
-foreach($file in @('pcdiag.exe','pc-diagnostics.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
+foreach($file in @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','pc-diagnostics.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
 $legacyTasks=@()
 foreach($name in @('Codex Automatic CPU Diagnostics','Codex Automatic Motherboard Diagnostics')){
     $t=Get-ScheduledTask -TaskName $name
@@ -121,7 +128,7 @@ Protect-Directory $dataRoot
 Protect-Directory $logRoot
 $backup=Join-Path $dataRoot ('migration-backup-'+(Get-Date -Format yyyyMMdd-HHmmss));Protect-Directory $backup
 foreach($dir in @('management','collectors')){Copy-Item -LiteralPath (Join-Path $package $dir) -Destination $codeRoot -Recurse -Force}
-foreach($file in @('pcdiag.exe','pc-diagnostics.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
+foreach($file in @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','pc-diagnostics.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
 Copy-Item -LiteralPath (Join-Path $oldRoot 'library') -Destination $codeRoot -Recurse -Force
 $state=[ordered]@{phase='prepared';time=[DateTimeOffset]::Now.ToString('o');tasks=@();activityScript=$activityScript;activityUserSid=$activitySid;activityWasRunning=($activityProcesses.Count -gt 0);legacyActivityRoot=$LegacyActivityRoot;startupPath=$startupPath;startupBackup=$null;logRoot=$logRoot}
 foreach($t in $legacyTasks){$xml=Join-Path $backup ($t.TaskName+'.xml');[IO.File]::WriteAllText($xml,(Export-ScheduledTask -TaskName $t.TaskName),$utf8);$state.tasks+=@{name=$t.TaskName;running=($t.State -eq 'Running');xml=$xml}}

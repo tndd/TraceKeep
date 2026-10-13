@@ -4,15 +4,18 @@ use std::{path::PathBuf,process::{Command,ExitCode},time::Duration,io::{Read,See
 
 fn management(action:&str,extra:&[String])->Result<i32,String>{
     let exe=std::env::current_exe().map_err(|e|e.to_string())?;
-    let script=exe.parent().unwrap().join(if action=="upgrade"{"management/Update-Recorder.ps1"}else{"management/Manage-Recorder.ps1"});
+    let script=exe.parent().unwrap().join(if action=="upgrade"{"management/Update-Recorder.ps1"}else if action=="config"{"management/Configure-Recorder.ps1"}else{"management/Manage-Recorder.ps1"});
     if !script.is_file(){return Err("Management package missing next to pcdiag.exe (management/Manage-Recorder.ps1). Extract the complete bundle.".into());}
     let shell=PathBuf::from(std::env::var_os("WINDIR").ok_or("WINDIR is unavailable")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
     let mut cmd=Command::new(shell);cmd.args(["-NoProfile","-ExecutionPolicy","Bypass","-File"]).arg(script);
-    if action!="upgrade"{cmd.args(["-Action",action]);}
+    if action!="upgrade" && action!="config"{cmd.args(["-Action",action]);}
     let status=cmd.args(extra).status().map_err(|e|e.to_string())?;
     Ok(status.code().unwrap_or(1))
 }
-fn healthy(v:&Value)->bool{["cpu","board","activity"].iter().all(|k|v["streams"][k]["state"]=="recording")}
+fn intentionally_disabled(v:&Value,key:&str)->bool{
+    v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().any(|w|w["name"]==key && w["enabled"]==false && w["state"]=="disabled"))
+}
+fn healthy(v:&Value)->bool{["cpu","board","activity"].iter().all(|k|intentionally_disabled(v,k)||v["streams"][k]["state"]=="recording")}
 fn evidence_healthy(v:&Value)->bool{
     v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|workers|workers.iter().any(|w|w["name"]=="evidence" && w["state"]=="recording" && w["errorCount"].as_u64()==Some(0)))
 }
@@ -29,7 +32,7 @@ fn latest_evidence(prefix:&str)->Value{
 }
 fn display(v:&Value){
     println!("PC Diagnostics  {}",v["time"].as_str().unwrap_or(""));
-    for k in ["cpu","board","activity"]{let s=&v["streams"][k];println!("{k:10} {:12} age={}s  {}",s["state"].as_str().unwrap_or("unknown"),s["age"],s["path"].as_str().unwrap_or("no log"));}
+    for k in ["cpu","board","activity"]{let s=&v["streams"][k];println!("{k:10} {:12} age={}s  {}",if intentionally_disabled(v,k){"disabled"}else{s["state"].as_str().unwrap_or("unknown")},s["age"],s["path"].as_str().unwrap_or("no log"));}
     let last=|key:&str|v["streams"][key]["history"].as_array().and_then(|a|a.last()).cloned().unwrap_or(Value::Null);
     let cpu=last("cpu");let board=last("board");let gpu=last("activity");
     println!("Last readings: CPU {} C | GPU {} C / {} W | board +12V {} V",cpu["cpuTemp"],gpu["gpuTemp"],gpu["gpuPower"],board["v12"]);
@@ -38,8 +41,19 @@ fn run()->Result<i32,String>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     let command=args.first().map(String::as_str).unwrap_or("help");
     if ["help","--help","-h"].contains(&command){
+        println!("pcdiag config show\npcdiag config enable|disable MODULE\npcdiag config interval MODULE SECONDS\npcdiag coverage\nConfiguration changes restart a running recorder; existing logs are retained.");
         println!("pcdiag status [--json]\npcdiag watch [--json]\npcdiag logs\npcdiag export\npcdiag doctor [--json]\npcdiag evidence\npcdiag incidents\npcdiag install --legacy-activity-root PATH\npcdiag upgrade\npcdiag start | stop | restart | rollback\n\nThe GUI is optional. Control/install/upgrade commands require an Administrator terminal.\nExit codes: 0 success, 1 command failure, 2 stale/missing/error streams.");return Ok(0);
     }
+    if command=="config"{
+        let operation=args.get(1).map(String::as_str).unwrap_or("show");
+        let extra=match operation{
+            "show" if args.len()<=2=>vec!["-Operation".into(),"show".into()],
+            "enable"|"disable" if args.len()==3 && args[2].chars().all(|c|c.is_ascii_alphanumeric())=>vec!["-Operation".into(),operation.into(),"-Module".into(),args[2].clone()],
+            "interval" if args.len()==4 && args[2].chars().all(|c|c.is_ascii_alphanumeric()) && args[3].parse::<u32>().is_ok()=>vec!["-Operation".into(),operation.into(),"-Module".into(),args[2].clone(),"-Seconds".into(),args[3].clone()],
+            _=>return Err("Use: pcdiag config show | enable/disable MODULE | interval MODULE SECONDS".into())
+        };return management("config",&extra);
+    }
+    if command=="coverage"{if args.len()!=1{return Err("Unexpected argument".into());}println!("{}",serde_json::to_string_pretty(&json!({"coverage":read_json(machine_dir().join("coverage.json")),"eventChannels":read_json(machine_dir().join("event-channel-coverage.json")),"settings":read_json(machine_dir().join("collection-settings.json")),"dumpPolicy":read_json(machine_dir().join("dump-policy-backup.json"))})).unwrap());return Ok(0);}
     if ["start","stop","restart","rollback","upgrade"].contains(&command){if args.len()!=1{return Err("Unexpected argument".into());}return management(command,&[]);}
     if ["evidence","incidents"].contains(&command){
         if args.len()!=1{return Err("Unexpected argument".into());}
@@ -66,8 +80,10 @@ fn run()->Result<i32,String>{
             v["coordinator"]=json!({"configured":machine_dir().join("sources.json").exists(),"heartbeatAgeSeconds":age,"runtime":runtime});
         }
         if command=="export"{println!("{}",export_snapshot(&v)?.display());return Ok(0);}
-        let ok=healthy(&v) && (command!="doctor" || (evidence_healthy(&v) && v["coordinator"]["configured"]==true && v["coordinator"]["heartbeatAgeSeconds"].as_i64().is_some_and(|age|(0..=10).contains(&age))));
-        if args.iter().any(|a|a=="--json"){println!("{}",serde_json::to_string(&v).unwrap());}else{display(&v);if command=="doctor"{println!("Unified configuration: {}\nCoordinator heartbeat age: {}s\nWorkers: {}",v["coordinator"]["configured"],v["coordinator"]["heartbeatAgeSeconds"],v["coordinator"]["runtime"]["workers"]);}}
+        let extended_ok=v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().any(|w|w["name"]=="extended"&&w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0)));
+        if command=="doctor"{v["coverage"]=read_json(machine_dir().join("coverage.json"));}
+        let ok=healthy(&v) && (command!="doctor" || (evidence_healthy(&v) && extended_ok && v["coordinator"]["configured"]==true && v["coordinator"]["heartbeatAgeSeconds"].as_i64().is_some_and(|age|(0..=10).contains(&age))));
+        if args.iter().any(|a|a=="--json"){println!("{}",serde_json::to_string(&v).unwrap());}else{display(&v);if command=="doctor"{println!("Unified configuration: {}\nCoordinator heartbeat age: {}s\nWorkers: {}\nCoverage (partial/unavailable is not healthy hardware): {}",v["coordinator"]["configured"],v["coordinator"]["heartbeatAgeSeconds"],v["coordinator"]["runtime"]["workers"],v["coverage"]["modules"]);}}
         if command!="watch"{return Ok(if ok{0}else{2});}
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -75,3 +91,4 @@ fn run()->Result<i32,String>{
 fn main()->ExitCode{match run(){Ok(code)=>ExitCode::from(code as u8),Err(e)=>{eprintln!("pcdiag: {e}");ExitCode::FAILURE}}}
 #[cfg(test)]mod tests{use super::*;#[test]fn status_requires_all_streams(){let mut s=json!({"streams":{"cpu":{"state":"recording"},"board":{"state":"recording"},"activity":{"state":"stale"}}});assert!(!healthy(&s));s["streams"]["activity"]["state"]=json!("recording");assert!(healthy(&s));assert!(!healthy(&json!({})));}}
 #[cfg(test)]mod evidence_tests{use super::*;#[test]fn missing_or_failing_evidence_is_not_healthy(){assert!(!evidence_healthy(&json!({})));let mut v=json!({"coordinator":{"runtime":{"workers":[{"name":"evidence","state":"recording","errorCount":0}]}}});assert!(evidence_healthy(&v));v["coordinator"]["runtime"]["workers"][0]["errorCount"]=json!(1);assert!(!evidence_healthy(&v));}}
+#[cfg(test)]mod opt_out_tests{use super::*;#[test]fn only_explicit_disabled_workers_are_exempt(){let mut v=json!({"streams":{"cpu":{"state":"stale"},"board":{"state":"recording"},"activity":{"state":"recording"}},"coordinator":{"runtime":{"workers":[{"name":"cpu","state":"disabled","enabled":false}]}}});assert!(healthy(&v));v["coordinator"]["runtime"]["workers"][0]["enabled"]=json!(true);assert!(!healthy(&v));v["coordinator"]["runtime"]["workers"][0]["enabled"]=json!(false);v["coordinator"]["runtime"]["workers"][0]["state"]=json!("failed");assert!(!healthy(&v));}}

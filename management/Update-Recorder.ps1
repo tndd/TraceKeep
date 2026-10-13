@@ -11,7 +11,7 @@ if($migration.phase -ne 'active'){throw 'The unified installation must be active
 $task=Get-ScheduledTask -TaskName 'PC Diagnostics Recorder'
 if($task.State -ne 'Running' -or $task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ine $shell -or -not $task.Actions[0].Arguments.Contains('"'+(Join-Path $codeRoot 'management\Run-Recorder.ps1')+'"')){throw 'Unexpected or stopped recorder task; no changes made.'}
 $files=@($manifest.files)
-$expected=@('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+$expected=@('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
 if($files.Count -ne $expected.Count){throw 'Unexpected update file count'}
 foreach($entry in $files){
     if($entry.path -notin $expected){throw 'Unexpected update path'}
@@ -26,6 +26,10 @@ if(@($files.path|Select-Object -Unique).Count -ne $expected.Count){throw 'Duplic
 . (Join-Path $package 'collectors\Read-NvmeHealth.ps1')
 # Compile the read-only reader before interrupting existing recording.
 Initialize-NvmeReader
+. (Join-Path $package 'collectors\Collection-Settings.ps1')
+. (Join-Path $package 'management\CrashDump-Policy.ps1')
+$collection=Get-CollectionSettings $dataRoot
+$settingsPath=Join-Path $dataRoot 'collection-settings.json';$settingsCreated=$false;$dumpPolicyChanged=$false
 $backup=Join-Path $dataRoot ('update-backup-'+(Get-Date -Format yyyyMMdd-HHmmss)+'-'+[guid]::NewGuid().ToString('N').Substring(0,6))
 [void][IO.Directory]::CreateDirectory($backup)
 $oldFiles=@()
@@ -38,6 +42,12 @@ try {
     & $shell -NoProfile -ExecutionPolicy Bypass -File $manager -Action stop
     if($LASTEXITCODE -ne 0){throw 'Could not stop recorder for update'}
     foreach($entry in $files){Copy-Item -LiteralPath (Join-Path $package $entry.path) -Destination (Join-Path $codeRoot $entry.path) -Force}
+    Protect-DiagnosticArchive (Join-Path $dataRoot 'archive')
+    if(-not(Test-Path $settingsPath)){
+        $legacySettings=Join-Path $dataRoot 'recorder-settings.json'
+        if(Test-Path $legacySettings){$legacy=Get-Content -Encoding UTF8 $legacySettings -Raw|ConvertFrom-Json;foreach($name in @('cpu','board','activity')){if($legacy.intervalMilliseconds.$name){$collection.modules[$name].intervalSeconds=[Math]::Ceiling($legacy.intervalMilliseconds.$name/1000)}}}
+        Save-EvidenceJson $settingsPath $collection;$settingsCreated=$true
+    }
     $since=[DateTimeOffset]::Now
     & $shell -NoProfile -ExecutionPolicy Bypass -File $manager -Action start
     if($LASTEXITCODE -ne 0){throw 'Updated sensor workers failed verification'}
@@ -51,15 +61,27 @@ try {
     $storageFile=Get-ChildItem -LiteralPath $logRoot -Filter 'storage-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
     $storage=if($storageFile){Get-Content -Encoding UTF8 -LiteralPath $storageFile.FullName -Tail 1|ConvertFrom-Json}else{$null}
     if(-not $storage -or ([DateTimeOffset]$storage.time) -lt $since -or -not $storage.nvme){throw 'New storage/NVMe evidence was not recorded'}
+    $coverage=$null;$deadline=(Get-Date).AddSeconds(150)
+    do {
+        $coveragePath=Join-Path $dataRoot 'coverage.json'
+        if(Test-Path $coveragePath){$coverage=Get-Content -Encoding UTF8 $coveragePath -Raw|ConvertFrom-Json;if(([DateTimeOffset]$coverage.time) -ge $since -and $coverage.modules){break}}
+        Start-Sleep -Seconds 2
+    }while((Get-Date) -lt $deadline)
+    if(-not $coverage -or ([DateTimeOffset]$coverage.time) -lt $since){throw 'Extended evidence did not complete its initial collection pass'}
+    . (Join-Path $package 'management\CrashDump-Policy.ps1')
+    $dumpPolicy=@{status='disabled'}
+    if($collection.modules.automaticDump.enabled){$dumpPolicy=Enable-DiagnosticDumps $dataRoot;$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
     $nvmeStatus=@($storage.nvme.disks|ForEach-Object {[pscustomobject]@{number=$_.number;status=$_.status;unsafeShutdowns=$_.health.counters.unsafeShutdowns;mediaErrors=$_.health.counters.mediaErrors;errorLogEntryCount=$_.health.counters.errorLogEntryCount;error=$_.error}})
     Save-EvidenceJson $audit @{phase='active';verifiedAt=[DateTimeOffset]::Now.ToString('o');files=$files;previousFiles=$oldFiles;evidenceErrors=$row.errors}
-    [pscustomobject]@{status='Evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;eventIntervalSeconds=15;storageIntervalSeconds=300;sensorIntervalSeconds=2;evidenceErrors=$row.errors;nvmeHealth=$nvmeStatus;nvmeErrors=$storage.nvme.errors;bootRestartTested=$false}|ConvertTo-Json -Depth 6
+    [pscustomobject]@{status='Extended evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;collectionSettings=$settingsPath;coverage=$coverage.modules;evidenceErrors=$row.errors;nvmeHealth=$nvmeStatus;nvmeErrors=$storage.nvme.errors;dumpPolicy=$dumpPolicy;bootRestartTested=$false}|ConvertTo-Json -Depth 8
 }catch{
     $failure=$_.Exception.Message
     if($changed){
         try {
             & $shell -NoProfile -ExecutionPolicy Bypass -File $manager -Action stop
             if($LASTEXITCODE -ne 0){throw 'Rollback could not stop updated workers'}
+            if($dumpPolicyChanged){Restore-DiagnosticDumps $dataRoot|Out-Null}
+            if($settingsCreated -and (Test-Path $settingsPath)){Remove-Item -LiteralPath $settingsPath}
             foreach($entry in $files){$dest=Join-Path $codeRoot $entry.path;if($entry.path -in $oldFiles){Copy-Item -LiteralPath (Join-Path $backup $entry.path) -Destination $dest -Force}elseif(Test-Path -LiteralPath $dest){Remove-Item -LiteralPath $dest}}
             & $shell -NoProfile -ExecutionPolicy Bypass -File $manager -Action start
             if($LASTEXITCODE -ne 0){throw 'Previous workers failed verification'}

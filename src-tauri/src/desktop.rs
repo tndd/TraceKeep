@@ -1,12 +1,15 @@
 //! Windows viewer integration. No sensor access or collector deployment.
 use std::{path::{Path,PathBuf}, ptr::{null,null_mut}, process::Command, os::windows::process::CommandExt};
 use windows_sys::Win32::{Foundation::*, System::{Threading::*, Registry::*}, UI::{Shell::*, WindowsAndMessaging::SW_HIDE}};
+use windows_sys::Win32::System::Com::{CoInitializeEx,CoUninitialize,COINIT_APARTMENTTHREADED,COINIT_DISABLE_OLE1DDE};
 
 fn wide(value:&str)->Vec<u16>{value.encode_utf16().chain(Some(0)).collect()}
 struct Handle(HANDLE);
 // Handles are owned, closed once, and only used with thread-safe kernel APIs.
 unsafe impl Send for Handle {}
 impl Drop for Handle {fn drop(&mut self){unsafe{CloseHandle(self.0);}}}
+struct ComApartment(bool);
+impl Drop for ComApartment {fn drop(&mut self){if self.0{unsafe{CoUninitialize();}}}}
 pub struct Instance { _mutex:Handle, mini:Handle, full:Handle }
 impl Instance {
     pub fn acquire(view:&str)->Result<Option<Self>,String>{unsafe{
@@ -40,6 +43,10 @@ pub fn control_recorder(action:&str)->Result<(),String>{
     let arguments=wide(action);let verb=wide("runas");
     // Elevate only the installed CLI, never a script beside a portable viewer.
     unsafe{
+        let com_result=CoInitializeEx(null(),(COINIT_APARTMENTTHREADED|COINIT_DISABLE_OLE1DDE) as u32);
+        // A pre-existing apartment is valid too; only uninitialize one we acquired.
+        if com_result<0 && com_result!=RPC_E_CHANGED_MODE{return Err(format!("Windows の操作準備に失敗しました ({com_result})"));}
+        let _apartment=ComApartment(com_result>=0);
         let mut info:SHELLEXECUTEINFOW=std::mem::zeroed();
         info.cbSize=std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
         info.fMask=SEE_MASK_NOCLOSEPROCESS|SEE_MASK_NOASYNC|SEE_MASK_FLAG_NO_UI;

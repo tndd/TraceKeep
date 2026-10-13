@@ -80,6 +80,14 @@ fn main(){
     let sources=Sources::load().unwrap_or_default();
     let app=tauri::Builder::default().manage(Arc::new(Mutex::new(Monitor::new(sources)))).manage(Control::default())
         .invoke_handler(tauri::generate_handler![get_snapshot,save_snapshot,set_sources,viewer_state,set_viewer_startup,recorder_action,open_view])
+        .on_window_event(|window,event|{
+            if let tauri::WindowEvent::CloseRequested{api,..}=event{
+                api.prevent_close();
+                // Preventing automatic app exit alone also cancels the last close on Windows.
+                // Destroy this window explicitly; the tray's event loop remains alive.
+                let _=window.destroy();
+            }
+        })
         .setup(move|app|{
             let mini=MenuItem::with_id(app,"mini","簡易モニター",true,None::<&str>)?;
             let full=MenuItem::with_id(app,"full","詳細モニター",true,None::<&str>)?;

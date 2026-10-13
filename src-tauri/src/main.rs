@@ -92,8 +92,7 @@ fn main(){
                 api.prevent_close();
                 // Preventing automatic app exit alone also cancels the last close on Windows.
                 // Destroy this window explicitly; the tray's event loop remains alive.
-                let window=window.clone();
-                tauri::async_runtime::spawn_blocking(move||{let _=window.destroy();});
+                let _=window.destroy();
             }
         })
         .setup(move|app|{

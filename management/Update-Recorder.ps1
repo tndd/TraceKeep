@@ -11,7 +11,7 @@ if($migration.phase -ne 'active'){throw 'The unified installation must be active
 $task=Get-ScheduledTask -TaskName 'PC Diagnostics Recorder'
 if($task.State -ne 'Running' -or $task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ine $shell -or -not $task.Actions[0].Arguments.Contains('"'+(Join-Path $codeRoot 'management\Run-Recorder.ps1')+'"')){throw 'Unexpected or stopped recorder task; no changes made.'}
 $files=@($manifest.files)
-$expected=@('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+$expected=@('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
 if($files.Count -ne $expected.Count){throw 'Unexpected update file count'}
 foreach($entry in $files){
     if($entry.path -notin $expected){throw 'Unexpected update path'}
@@ -23,6 +23,9 @@ foreach($entry in $files){
 }
 if(@($files.path|Select-Object -Unique).Count -ne $expected.Count){throw 'Duplicate update path'}
 . (Join-Path $package 'collectors\Evidence-Core.ps1')
+. (Join-Path $package 'collectors\Read-NvmeHealth.ps1')
+# Compile the read-only reader before interrupting existing recording.
+Initialize-NvmeReader
 $backup=Join-Path $dataRoot ('update-backup-'+(Get-Date -Format yyyyMMdd-HHmmss)+'-'+[guid]::NewGuid().ToString('N').Substring(0,6))
 [void][IO.Directory]::CreateDirectory($backup)
 $oldFiles=@()
@@ -45,8 +48,12 @@ try {
         Start-Sleep -Seconds 2
     }while((Get-Date) -lt $deadline)
     if(-not $verified){throw 'Evidence worker did not verify System event checkpointing'}
+    $storageFile=Get-ChildItem -LiteralPath $logRoot -Filter 'storage-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
+    $storage=if($storageFile){Get-Content -Encoding UTF8 -LiteralPath $storageFile.FullName -Tail 1|ConvertFrom-Json}else{$null}
+    if(-not $storage -or ([DateTimeOffset]$storage.time) -lt $since -or -not $storage.nvme){throw 'New storage/NVMe evidence was not recorded'}
+    $nvmeStatus=@($storage.nvme.disks|ForEach-Object {[pscustomobject]@{number=$_.number;status=$_.status;unsafeShutdowns=$_.health.counters.unsafeShutdowns;mediaErrors=$_.health.counters.mediaErrors;errorLogEntryCount=$_.health.counters.errorLogEntryCount;error=$_.error}})
     Save-EvidenceJson $audit @{phase='active';verifiedAt=[DateTimeOffset]::Now.ToString('o');files=$files;previousFiles=$oldFiles;evidenceErrors=$row.errors}
-    [pscustomobject]@{status='Evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;eventIntervalSeconds=15;storageIntervalSeconds=300;sensorIntervalSeconds=2;evidenceErrors=$row.errors;bootRestartTested=$false}|ConvertTo-Json -Depth 6
+    [pscustomobject]@{status='Evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;eventIntervalSeconds=15;storageIntervalSeconds=300;sensorIntervalSeconds=2;evidenceErrors=$row.errors;nvmeHealth=$nvmeStatus;nvmeErrors=$storage.nvme.errors;bootRestartTested=$false}|ConvertTo-Json -Depth 6
 }catch{
     $failure=$_.Exception.Message
     if($changed){

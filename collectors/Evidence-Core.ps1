@@ -1,4 +1,5 @@
 $script:EvidenceUtf8=[Text.UTF8Encoding]::new($false)
+$script:EvidenceCollectorDirectory=$PSScriptRoot
 function Test-EvidenceReady($row,[DateTimeOffset]$since) {
     return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0
 }
@@ -111,7 +112,9 @@ function Get-StorageEvidence {
             $items+=@{deviceId=$disk.DeviceId;name=$disk.FriendlyName;busType=[string]$disk.BusType;health=[string]$disk.HealthStatus;operational=@($disk.OperationalStatus|ForEach-Object {[string]$_});size=$disk.Size;reliability=$counter;error=$error}
         }
     }catch{$errors+=$_.Exception.Message}
-    return @{time=[DateTimeOffset]::Now.ToString('o');disks=$items;errors=$errors;note='Windows-exposed counters only. Null/unsupported is not zero or healthy; raw NVMe SMART/unsafe-shutdown counters are not guaranteed.'}
+    $nvme=$null
+    try {. (Join-Path $script:EvidenceCollectorDirectory 'Read-NvmeHealth.ps1');$nvme=Get-NvmeHealthEvidence}catch{$errors+=('NVMe reader: '+$_.Exception.Message)}
+    return @{time=[DateTimeOffset]::Now.ToString('o');disks=$items;nvme=$nvme;errors=$errors;note='Windows reliability and direct NVMe SMART counters. Null/unsupported is not zero or healthy. Lifetime counters do not date or attribute a failure.'}
 }
 function Get-BootEvidenceXPath($bootTime) {
     return "*[System[(EventID=41 or EventID=6008 or EventID=1001 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger']) and TimeCreated[@SystemTime >= '"+([DateTimeOffset]$bootTime).UtcDateTime.AddDays(-3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']]]"

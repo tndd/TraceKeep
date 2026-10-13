@@ -1,23 +1,28 @@
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot
 $utf8=[Text.UTF8Encoding]::new($false)
-foreach($mode in @('success','failure','evidence-error')){
+foreach($mode in @('success','failure','evidence-error','storage-missing')){
     $root=Join-Path $env:TEMP ('pcdiag-update-simulation-'+[guid]::NewGuid().ToString('N'))
     $codeRoot=Join-Path $root 'installed';$dataRoot=Join-Path $root 'data';$package=Join-Path $root 'package'
     foreach($dir in @($codeRoot,$dataRoot,(Join-Path $dataRoot 'logs'),(Join-Path $codeRoot 'management'),(Join-Path $codeRoot 'collectors'),(Join-Path $package 'management'),(Join-Path $package 'collectors'))){[void][IO.Directory]::CreateDirectory($dir)}
     [IO.File]::WriteAllText((Join-Path $dataRoot 'migration.json'),'{"phase":"active"}',$utf8)
-    $files=@('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+    $files=@('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
     foreach($file in $files){
         [IO.File]::WriteAllText((Join-Path $package $file),'# synthetic update fixture',$utf8)
-        if($file -notin @('collectors\Evidence-Core.ps1','collectors\Start-EvidenceLogging.ps1')){[IO.File]::WriteAllText((Join-Path $codeRoot $file),'# previous synthetic fixture',$utf8)}
+        if($file -notin @('collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){[IO.File]::WriteAllText((Join-Path $codeRoot $file),'# previous synthetic fixture',$utf8)}
     }
     Copy-Item (Join-Path $repo 'collectors\Evidence-Core.ps1') (Join-Path $package 'collectors\Evidence-Core.ps1')
+    Copy-Item (Join-Path $repo 'collectors\Read-NvmeHealth.ps1') (Join-Path $package 'collectors\Read-NvmeHealth.ps1')
     $oldManager='param([string]$Action); exit 0 # previous synthetic manager'
     [IO.File]::WriteAllText((Join-Path $codeRoot 'management\Manage-Recorder.ps1'),$oldManager,$utf8)
     $newManager=if($mode -eq 'failure'){'param([string]$Action); if($Action -eq "start"){exit 1};exit 0'}else{
         'param([string]$Action);if($Action -eq "start"){$root="'+$dataRoot+'";$row=@{time=[DateTimeOffset]::Now.ToString("o");event="heartbeat";channels=@(@{channel="System";watermark=123});errors=@()}|ConvertTo-Json -Compress -Depth 5;[IO.File]::WriteAllText((Join-Path $root ("logs\evidence-"+(Get-Date -Format yyyyMMdd)+".jsonl")),$row+"`n")};exit 0'
     }
     if($mode -eq 'evidence-error'){$newManager=$newManager.Replace('errors=@()','errors=@(@{error="synthetic evidence failure"})')}
+    if($mode -eq 'success'){
+        $storageFixture='$storage=@{time=[DateTimeOffset]::Now.ToString("o");nvme=@{disks=@();errors=@()}}|ConvertTo-Json -Compress -Depth 5;[IO.File]::WriteAllText((Join-Path $root ("logs\storage-"+(Get-Date -Format yyyyMMdd)+".jsonl")),$storage+"`n");'
+        $newManager=$newManager.Replace('$row=@{',$storageFixture+'$row=@{')
+    }
     [IO.File]::WriteAllText((Join-Path $package 'management\Manage-Recorder.ps1'),$newManager,$utf8)
     $manifest=@{files=@($files|ForEach-Object {@{path=$_;sha256=(Get-FileHash (Join-Path $package $_)).Hash}})}
     [IO.File]::WriteAllText((Join-Path $package 'update-manifest.json'),($manifest|ConvertTo-Json -Depth 5),$utf8)

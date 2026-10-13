@@ -38,7 +38,7 @@ After installation:
 
 These four control commands require elevation. `stop` disables automatic starts until `start` is issued. `rollback` restores the old configuration and retains both sets of logs. Reinstallation over an existing migration is deliberately rejected. A rollback activity recovery task uses the original user's interactive, limited token; it never runs a user-writable script as SYSTEM.
 
-One SYSTEM task, **PC Diagnostics Recorder**, starts at boot. The coordinator monitors worker exits and log-file freshness. No writes for 60 seconds trigger an isolated worker restart. Repeated failures are limited to three restarts per ten minutes; other workers keep running. Coordinator events and a heartbeat explain recovery actions. This detects stalled recording, not hardware health. Boot configuration is installed, but a real reboot test remains a separate check.
+One SYSTEM task, **PC Diagnostics Recorder**, starts at boot. The coordinator monitors worker exits and log-file freshness. No writes for 120 seconds trigger an isolated worker restart. Repeated failures are limited to three restarts per ten minutes; other workers keep running. Coordinator events and a heartbeat explain recovery actions. This detects stalled recording, not hardware health. Boot configuration is installed, but a real reboot test remains a separate check.
 
 Machine `sources.json` takes precedence for both CUI and GUI. Per-user GUI source overrides are disabled while unified recording is configured. The recorder orchestration and hardware workers currently use PowerShell; Rust owns CUI commands, log reading, health presentation and export. Sensor access still uses the existing library/driver and `nvidia-smi`.
 
@@ -69,7 +69,8 @@ The viewer reads existing JSONL logs. It does not install drivers or start anoth
 | CPU | `cpu-auto-YYYYMMDD.jsonl` | Unified boot task / isolated CPU worker |
 | Motherboard | `board-auto-YYYYMMDD.jsonl` | Unified boot task / isolated board worker |
 | GPU, load | `activity-YYYYMMDD.jsonl` | Unified boot task / activity worker |
-| Windows events | `events-YYYYMMDD.jsonl` | Unified boot task / activity worker |
+| Windows events | `events-YYYYMMDD.jsonl` | Unified boot task / evidence worker |
+| Storage / NVMe health | `storage-YYYYMMDD.jsonl` | Unified boot task / evidence worker |
 
 The `collectors/` directory contains the PowerShell source used by these independent recorders. CPU and board reading uses LibreHardwareMonitor and PawnIO; GPU reading uses NVIDIA's installed `nvidia-smi`. Those third-party binaries are not redistributed here. Deploying new collector code over an existing installation needs an explicit migration; do not run a second collector alongside the installed version.
 
@@ -79,7 +80,7 @@ The auxiliary collector also acquires the legacy per-user mutex, so it exits whe
 
 The isolated evidence worker runs every 15 seconds. It stores the full XML of selected System/Application events and enabled WHEA/storage operational channels. Durable per-channel record-ID checkpoints survive recorder restarts and long downtime; first-time recovery is bounded to seven days. Each batch is capped at 2,000 selected events and drains remaining backlog on subsequent passes. A failed append never advances its checkpoint. An interrupted batch can replay records: deduplicate by channel, record ID and event time. Record-ID rollback or loss/replacement of the saved event-time anchor triggers bounded recovery and an explicit gap notice. Windows events already overwritten before recovery cannot be reconstructed.
 
-Every five minutes it captures Windows-exposed storage reliability counters, crash-dump settings, page-file allocation, local-volume free space and dump metadata. Unsupported fields are null, and access failures are retained explicitly. This does not claim to expose all raw NVMe SMART fields. Machine firmware/driver inventory is captured at worker startup without serial numbers.
+At worker startup and every five minutes it captures Windows-exposed storage reliability counters, direct NVMe SMART/health, crash-dump settings, page-file allocation, local-volume free space and dump metadata. Unsupported fields are null, and access failures are retained explicitly. NVMe health uses the built-in Windows storage-property query with no new driver or device configuration changes. Controller lifetime counters include unsafe shutdowns, power cycles, media errors, error-log count and temperature warning duration. Full 512-byte health pages are retained as Base64; unsigned 128-bit counters are decimal strings to avoid loss of precision. These appear under `storage.nvme` in `pcdiag evidence`. A successful recorder heartbeat does not make an unavailable device query healthy: inspect each NVMe disk's `status` and `error`. Machine firmware/driver inventory is captured at worker startup without serial numbers. See [evidence coverage and limits](docs/evidence-coverage.md).
 
 After boot events settle for 90 seconds, one snapshot per OS boot is saved under `%ProgramData%\PCDiagnostics\incidents\boot-...`. It includes recent raw boot/failure events, crash configuration and bounded tails from the last two dates of each stream (8 MiB per file). The manifest records truncation, failures and SHA-256 hashes. Original logs remain intact; dumps are indexed, not copied. A snapshot without event 41/6008 is unclassified, not proof of clean shutdown. Late events remain in the continuous event archive; the snapshot is immutable. Sleep/resume does not create a new OS-boot snapshot.
 
@@ -104,8 +105,8 @@ The GUI runs without administrator privileges and exposes only read/status, expo
 
 ## Roadmap
 
-* Automatic incident bundles after abnormal boots.
-* Additional WHEA/storage channels and periodic NVMe health counters.
+* Incident comparison across boots, with counter changes and explicit sampling gaps.
+* Independent external power-signal recorder import and clock alignment.
 * Configurable sensor mappings across motherboard/CPU models.
 
 Verification includes Rust log-reader tests, visualization semantics, legacy mutex coexistence, isolated simulated worker recovery/stop, empty-reading rejection, and mocked rollback with limited-token recovery. Tests never poll hardware or alter installed tasks.

@@ -101,7 +101,7 @@ $activityScript=Join-Path (Split-Path $LegacyActivityRoot) 'Start-ContinuousDiag
 if(-not(Test-Path -LiteralPath $activityScript)){throw 'Legacy activity recorder script was not found beside the log directory.'}
 if(-not(Test-Path (Join-Path $oldRoot 'library\LibreHardwareMonitorLib.dll'))){throw 'Existing protected sensor library was not found. No driver or library will be downloaded.'}
 $package=Split-Path $PSScriptRoot
-foreach($file in @('pcdiag.exe','pc-diagnostics.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
+foreach($file in @('pcdiag.exe','pc-diagnostics.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
 $legacyTasks=@()
 foreach($name in @('Codex Automatic CPU Diagnostics','Codex Automatic Motherboard Diagnostics')){
     $t=Get-ScheduledTask -TaskName $name

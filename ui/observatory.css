@@ -983,4 +983,5 @@ input::placeholder {
   }
 }
 
-img.logo-mark{object-fit:contain;background:transparent;border:0;padding:0}
+img.logo-mark{width:30px;height:30px;flex-shrink:0;object-fit:contain;background:transparent;border:0;padding:0}
+.logo .brand-name{font-size:13px;letter-spacing:1px}.logo .brand-accent{color:#38edf1}

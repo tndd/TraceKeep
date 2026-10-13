@@ -34,7 +34,7 @@ No actionable P0/P1/P2 visual findings remain.
 
 ## Comparison history
 
-First gauge comparison passed after correcting the planned content height before capture. No post-capture P0/P1/P2 iteration was required.
+First gauge comparison passed after correcting the planned content height before capture. An additional full-console brand check found the PNG at its intrinsic 128 px size (P2); explicit 30 × 30 px bounds and compact single-line wordmark fixed it. A browser reload confirmed 30 × 30 px rendering and the complete TraceKeep wordmark.
 
 ## Follow-up polish
 

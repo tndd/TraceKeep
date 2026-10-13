@@ -14,7 +14,14 @@ public static class TrayWindows {
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
-  [DllImport("user32.dll")] public static extern int GetWindowLong(IntPtr h,int index);
+  [StructLayout(LayoutKind.Sequential)] struct Rect {public int left,top,right,bottom;}
+  [StructLayout(LayoutKind.Sequential)] struct Point {public int x,y;}
+  [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h,out Rect rect);
+  [DllImport("user32.dll")] static extern bool ClientToScreen(IntPtr h,ref Point point);
+  [DllImport("user32.dll")] static extern uint GetDpiForWindow(IntPtr h);
+  // Tao retains WS_CAPTION for Windows behavior, then removes the caption via
+  // WM_NCCALCSIZE. Measure actual non-client height instead of the style flag.
+  public static double TopInset(IntPtr h) {Rect r;Point p=new Point();if(!GetWindowRect(h,out r)||!ClientToScreen(h,ref p))throw new Exception("Cannot measure window frame");return (p.y-r.top)*96.0/Math.Max(96,GetDpiForWindow(h));}
   public static IntPtr[] Visible(int pid) {var list=new List<IntPtr>();EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var name=new StringBuilder(256);GetWindowText(h,name,256);if(owner==pid&&IsWindowVisible(h)&&name.ToString().StartsWith("TraceKeep"))list.Add(h);return true;},IntPtr.Zero);return list.ToArray();}
 }
 '@
@@ -28,7 +35,7 @@ try {
     $deadline=(Get-Date).AddSeconds(45)
     do {Start-Sleep -Milliseconds 500;$windows=@([TrayWindows]::Visible($viewer.Id));if($viewer.HasExited){throw 'Viewer exited before displaying its first window'}}while($windows.Count -eq 0 -and (Get-Date) -lt $deadline)
     if($windows.Count -eq 0){throw 'Mini monitor did not open'}
-    foreach($window in $windows){if(([TrayWindows]::GetWindowLong($window,-16) -band 0x00C00000) -ne 0){throw 'Mini monitor still has a native title bar'}}
+    foreach($window in $windows){$inset=[TrayWindows]::TopInset($window);Write-Output "Mini top non-client inset: $inset logical pixels";if($inset -gt 10){throw 'Mini monitor still reserves native title bar height'}}
     foreach($window in $windows){[void][TrayWindows]::PostMessage($window,0x10,[IntPtr]::Zero,[IntPtr]::Zero)}
     Start-Sleep -Seconds 3
     if($viewer.HasExited){throw 'Window X incorrectly terminated the tray'}

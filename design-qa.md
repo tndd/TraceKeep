@@ -57,7 +57,9 @@ The later compact layout supersedes the original 300 × 228 size and footer desc
 
 The default content size is 300 × 202, with a 280 × 202 minimum. Browser verification at both widths found no horizontal or vertical overflow. The expand action opened the full dashboard. JavaScript syntax checks and all eight mini state tests passed. The private screenshot uses explicitly labelled synthetic temperatures and is kept outside the repository. The temporary viewport override was reset. Native verification is tracked by Windows CI; native pixels are not accessible through the current computer-use interface.
 
-final result: passed (browser layout and interaction)
+Windows CI run 38465206526, attempt 2, completed successfully: frontend/PowerShell checks, 19 Rust tests, release build and tray lifecycle. The verified artifact was installed by replacing only the per-user viewer; coordinator and all five worker PIDs remained unchanged, with all workers recording and zero reported errors. Progress reporting did not expose steps until completion, so missing live steps alone must not be treated as proof that a runner is idle.
+
+final result: passed
 
 ## Full device workspace — production integration (2026-10-14)
 

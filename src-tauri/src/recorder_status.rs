@@ -27,7 +27,10 @@ pub fn summary(c:&Value) -> Value {
 
 #[cfg(test)] mod tests {
     use super::*;
-    fn healthy()->Value {json!({"configured":true,"heartbeatAgeSeconds":1,"runtime":{"workers":["cpu","board","activity","evidence","extended"].iter().map(|n|json!({"name":n,"enabled":true,"state":"recording","errorCount":0})).collect::<Vec<_>>()}})}
+    fn healthy()->Value {
+        let workers=["cpu","board","activity","evidence","extended"].iter().map(|n|json!({"name":n,"enabled":true,"state":"recording","errorCount":0})).collect::<Vec<_>>();
+        json!({"configured":true,"heartbeatAgeSeconds":1,"runtime":{"workers":workers}})
+    }
     #[test] fn stale_and_missing_do_not_show_green(){let mut c=healthy();assert_eq!(summary(&c)["state"],"recording");c["heartbeatAgeSeconds"]=json!(11);assert_eq!(summary(&c)["state"],"unknown");c["heartbeatAgeSeconds"]=json!(-2);assert_eq!(summary(&c)["state"],"unknown");assert_ne!(summary(&json!({}))["state"],"recording");}
     #[test] fn failure_and_opt_out_are_different(){let mut c=healthy();c["runtime"]["workers"][0]["errorCount"]=json!(1);assert_eq!(summary(&c)["state"],"attention");c["runtime"]["workers"][0]["enabled"]=json!(false);assert_eq!(summary(&c)["state"],"attention");c["runtime"]["workers"][0]["state"]=json!("disabled");assert_eq!(summary(&c)["state"],"recording");}
     #[test] fn explicit_stop_is_not_a_recording_failure(){let mut c=healthy();c["stopRequested"]=json!(true);assert_eq!(summary(&c)["state"],"stopping");c["heartbeatAgeSeconds"]=json!(30);assert_eq!(summary(&c)["state"],"stopped");}

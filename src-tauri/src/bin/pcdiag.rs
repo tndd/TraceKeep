@@ -88,12 +88,6 @@ fn run()->Result<i32,String>{
     let mut monitor=Monitor::new(sources);
     loop{
         let mut v=monitor.snapshot();
-        {
-            let status=machine_dir().join("runtime.json");
-            let runtime=if status.exists(){serde_json::from_slice::<Value>(&std::fs::read(&status).map_err(|e|e.to_string())?).map_err(|e|e.to_string())?}else{Value::Null};
-            let age=runtime["time"].as_str().and_then(|t|chrono::DateTime::parse_from_rfc3339(t).ok()).map(|t|(chrono::Utc::now()-t.with_timezone(&chrono::Utc)).num_seconds());
-            v["coordinator"]=json!({"configured":machine_dir().join("sources.json").exists(),"heartbeatAgeSeconds":age,"runtime":runtime});
-        }
         if command=="export"{println!("{}",export_snapshot(&v)?.display());return Ok(0);}
         let extended_ok=v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().any(|w|w["name"]=="extended"&&w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0)));
         if command=="doctor"{v["coverage"]=read_json(machine_dir().join("coverage.json"));}

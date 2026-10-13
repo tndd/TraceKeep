@@ -1,17 +1,8 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PC Diagnostics · ミニモニター</title><link rel="stylesheet" href="mini.css"></head>
-<body>
-<main>
-  <header><span class="brand-icon" aria-hidden="true">⌁</span><div><strong>PC DIAGNOSTICS</strong><small>LOCAL RECORDER</small></div><span id="preview" hidden>模擬データ</span></header>
-  <section class="status" aria-labelledby="status-title"><div class="status-line"><span id="light" class="light"></span><h1 id="status-title">記録状態を確認中</h1></div><p id="status-detail">記録プロセスの応答を待っています。</p><small id="updated">最終更新 —</small></section>
-  <section class="readings" aria-label="最新の温度"><div><span class="eyebrow">CPU</span><p><strong id="cpu">—</strong><span class="unit">°C</span></p><small id="cpu-age">取得待ち</small></div><div><span class="eyebrow">GPU</span><p><strong id="gpu">—</strong><span class="unit">°C</span></p><small id="gpu-age">取得待ち</small></div></section>
-  <section class="load-row"><span>CPU負荷</span><meter id="load-meter" min="0" max="100" value="0" aria-label="CPU負荷"></meter><strong id="load">—</strong></section>
-  <section class="worker-section"><div class="section-title"><span>記録プロセス</span><span id="worker-count">—</span></div><div id="workers" class="workers"></div></section>
-  <section class="actions"><button id="start" class="primary" disabled>記録を開始</button><button id="stop" disabled>記録を停止</button><button id="full" class="detail">詳細を開く ↗</button></section>
-  <label class="startup"><input id="startup" type="checkbox">ログオン時にトレイを表示</label>
-  <p id="notice" role="status" aria-live="polite"></p>
-  <footer>× はトレイに格納。右クリックの終了で記録も停止。<br>開始・停止時には Windows の管理者権限確認が出ます。</footer>
-</main>
-<dialog id="stop-dialog"><h2>記録を停止しますか？</h2><p>再び「記録を開始」を押すまで、再起動後も収集は停止します。これまでのログは残ります。</p><div><button id="cancel-stop">戻る</button><button id="confirm-stop" class="primary">記録を停止</button></div></dialog>
-<script src="mini-model.js"></script><script src="mini.js"></script>
-</body></html>
+<body><main>
+  <header><span id="light" class="light"></span><span id="status-title">確認中</span><span id="preview" hidden>模擬</span><button id="full" aria-label="詳細モニターを開く" title="詳細モニターを開く">詳細 ↗</button></header>
+  <section class="readings" aria-label="最新の温度"><div><span class="eyebrow">CPU</span><p><strong id="cpu">—</strong><span class="unit">°C</span></p></div><div><span class="eyebrow">GPU</span><p><strong id="gpu">—</strong><span class="unit">°C</span></p></div></section>
+  <section id="workers" class="workers" aria-label="各記録処理の稼働状態"></section>
+  <footer>記録の操作はトレイを右クリック</footer><p id="notice" role="status" aria-live="polite"></p>
+</main><script src="mini-model.js"></script><script src="mini.js"></script></body></html>

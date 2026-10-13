@@ -120,3 +120,9 @@ The GUI runs without administrator privileges and exposes only read/status, expo
 * Configurable sensor mappings across motherboard/CPU models.
 
 Verification includes Rust log-reader tests, visualization semantics, legacy mutex coexistence, isolated simulated worker recovery/stop, empty-reading rejection, and mocked rollback with limited-token recovery. Tests never poll hardware or alter installed tasks.
+
+### Compact tray temperature display
+
+The notification icon displays the latest saved CPU temperature rounded to whole degrees every two seconds. Hover for the decimal reading and recorder state. `Ⅱ` means recording is stopped/stopping; `—` means the latest temperature is unavailable, disabled, stale (over ten seconds), or untrusted. The small accent indicates recording status, not an overheating diagnosis. The current CPU mapping is the same AMD Tctl/Tdie sensor used by the dashboard.
+
+When all windows are closed, only a bounded CPU log tail (256 KiB per read, one retained sample) and the recorder heartbeat are read. No additional hardware poller is started. The compact monitor shows CPU/GPU temperatures and five recording lamps; amber denotes a missing/stale/error condition, gray denotes stopped/opted out. Hover or keyboard focus exposes each lamp's state. Recording start/stop and login startup are in the tray context menu. Window X still returns to the tray, while explicit Exit stops recording before exiting.

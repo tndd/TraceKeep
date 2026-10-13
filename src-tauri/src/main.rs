@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-use diagnostics_core::{Monitor,Sources,export_snapshot,recorder_status,desktop};
+use diagnostics_core::{Monitor,Sources,export_snapshot,recorder_status,desktop,tray_temperature,LogReader};
 use std::sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}};
 use serde_json::{json,Value};
-use tauri::{Manager,menu::{Menu,MenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
+use tauri::{Manager,menu::{Menu,MenuItem,CheckMenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
 type Shared=Arc<Mutex<Monitor>>;
 static VIEW_LOCK:Mutex<()>=Mutex::new(());
 #[derive(Default)]struct Control {busy:AtomicBool,message:Mutex<String>}
@@ -49,13 +49,13 @@ async fn recorder_action(app:tauri::AppHandle,action:String)->Result<(),String>{
 fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     let _opening=VIEW_LOCK.lock().map_err(|e|e.to_string())?;
     let (label,url,title,width,height)=match view {
-        "mini"=>("mini","mini.html","PC Diagnostics · ミニモニター",430.,620.),
+        "mini"=>("mini","mini.html","PC Diagnostics · ミニモニター",300.,236.),
         "full"=>("main","index.html","PC Diagnostics · 詳細",1320.,900.),
         _=>return Err("Unknown view".into())
     };
     if let Some(window)=app.get_webview_window(label){window.unminimize().map_err(|e|e.to_string())?;window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;return Ok(());}
     let mut builder=tauri::WebviewWindowBuilder::new(app,label,tauri::WebviewUrl::App(url.into()))
-        .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{380.}else{720.},if view=="mini"{520.}else{600.});
+        .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{280.}else{720.},if view=="mini"{218.}else{600.});
     if view=="mini" {
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();
             builder=builder.position((pos.x as f64+size.width as f64-width*scale-20.*scale)/scale,(pos.y as f64+size.height as f64-height*scale-60.*scale).max(pos.y as f64)/scale);}
@@ -71,15 +71,11 @@ fn request_view(app:&tauri::AppHandle,view:&str){
     tauri::async_runtime::spawn_blocking(move||{let _=show_view(&app,&view);});
 }
 
-fn tray_icon(state:&str)->tauri::image::Image<'static>{
-    let color=match state{"recording"=>[78,224,181,255],"stopped"|"stopping"=>[147,157,175,255],_=>[255,188,92,255]};
-    let mut pixels=vec![0u8;32*32*4];
-    for y in 0..32usize {for x in 0..32usize {
-        let ring=(4..28).contains(&x)&&(4..28).contains(&y)&&(x<6||x>=26||y<6||y>=26);
-        let pulse=(8..12).contains(&x)&&(16..19).contains(&y)||(12..15).contains(&x)&&(10..19).contains(&y)||(15..18).contains(&x)&&(10..23).contains(&y)||(18..21).contains(&x)&&(15..23).contains(&y)||(21..25).contains(&x)&&(15..18).contains(&y);
-        let dot=(x as i32-26).pow(2)+(y as i32-26).pow(2)<=20;
-        let p=if dot{color}else if ring||pulse{[199,231,242,255]}else{[0,0,0,0]};pixels[(y*32+x)*4..(y*32+x)*4+4].copy_from_slice(&p);
-    }}tauri::image::Image::new_owned(pixels,32,32)
+fn tray_icon(display:&tray_temperature::Display)->tauri::image::Image<'static>{
+    let pixels=tray_temperature::render(display).unwrap_or_else(|_|{
+        // Visible failure marker if Windows cannot allocate a text bitmap.
+        let mut p=vec![0;64*64*4];for y in 27..37 {for x in 10..54 {p[(y*64+x)*4..(y*64+x+1)*4].copy_from_slice(&[255,191,102,255]);}}p
+    });tauri::image::Image::new_owned(pixels,64,64)
 }
 fn main(){
     let view=if std::env::args().any(|a|a=="--tray"){"tray"}else if std::env::args().any(|a|a=="--full"){"full"}else{"mini"};
@@ -99,19 +95,38 @@ fn main(){
             let mini=MenuItem::with_id(app,"mini","簡易モニター",true,None::<&str>)?;
             let full=MenuItem::with_id(app,"full","詳細モニター",true,None::<&str>)?;
             let quit=MenuItem::with_id(app,"quit","記録を停止して終了…",true,None::<&str>)?;
-            let menu=Menu::with_items(app,&[&mini,&full,&quit])?;
-            TrayIconBuilder::with_id("diagnostics").icon(tray_icon("unknown")).tooltip("PC Diagnostics · 記録を確認中")
+            let start=MenuItem::with_id(app,"start","記録を開始",true,None::<&str>)?;
+            let stop=MenuItem::with_id(app,"stop","記録を停止…",true,None::<&str>)?;
+            let startup=CheckMenuItem::with_id(app,"startup","ログオン時にトレイを表示",true,desktop::startup_status().unwrap_or(false),None::<&str>)?;
+            let menu=Menu::with_items(app,&[&mini,&full,&start,&stop,&startup,&quit])?;
+            TrayIconBuilder::with_id("diagnostics").icon(tray_icon(&tray_temperature::Display{text:"—".into(),tooltip:String::new(),color:[255,191,102]})).tooltip("PC Diagnostics · 記録を確認中")
                 .menu(&menu).show_menu_on_left_click(false)
-                .on_menu_event(|app,event|match event.id.as_ref(){
+                .on_menu_event(move|app,event|match event.id.as_ref(){
                     "mini"|"full"=>request_view(app,event.id.as_ref()),
+                    "startup"=>{let result=desktop::startup_status().and_then(|current|std::env::current_exe().map_err(|e|e.to_string()).and_then(|exe|desktop::set_startup(!current,&exe)));let _=startup.set_checked(desktop::startup_status().unwrap_or(false));if let Err(e)=result{if let Ok(mut m)=app.state::<Control>().message.lock(){*m=e;}request_view(app,"mini");}},
+                    "start"|"stop"=>{let action=event.id.as_ref().to_string();let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),action,false).await.is_err(){let _=show_view(&app,"mini");}});},
                     "quit"=>{let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),"stop".into(),true).await.is_err(){let _=show_view(&app,"mini");}});},_=>{}
                 })
                 .on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){request_view(tray.app_handle(),"mini");}}).build(app)?;
             let handle=app.handle().clone();
-            std::thread::spawn(move||{let mut previous=String::new();loop{
+            std::thread::spawn(move||{
+                let mut previous=String::new();let mut previous_tooltip=String::new();
+                let mut root=std::path::PathBuf::new();let mut reader=LogReader::latest_only(root.clone(),"cpu-auto-");
+                loop{
                 if let Some(view)=instance.requested_view(){let _=show_view(&handle,view);}
-                let status=recorder_status::summary(&recorder_status::read_coordinator());let state=status["state"].as_str().unwrap_or("unknown");
-                if state!=previous{previous=state.into();if let Some(tray)=handle.tray_by_id("diagnostics"){let _=tray.set_icon(Some(tray_icon(state)));let _=tray.set_tooltip(Some(format!("PC Diagnostics · {}",status["label"].as_str().unwrap_or("確認が必要"))));}}
+                let coordinator=recorder_status::read_coordinator();
+                let configured=Sources::load();
+                if let Ok(sources)=&configured {if root!=sources.sensor_root {root=sources.sensor_root.clone();reader=LogReader::latest_only(root.clone(),"cpu-auto-");}reader.update();}
+                else {reader.error=Some("Cannot read source configuration".into());}
+                let display=tray_temperature::display(&coordinator,&reader,chrono::Utc::now().timestamp_millis());
+                let key=format!("{}{:?}",display.text,display.color);
+                if let Some(tray)=handle.tray_by_id("diagnostics"){
+                    if key!=previous {if tray.set_icon(Some(tray_icon(&display))).is_ok(){previous=key;}}
+                    if display.tooltip!=previous_tooltip {if tray.set_tooltip(Some(&display.tooltip)).is_ok(){previous_tooltip=display.tooltip;}}
+                }
+                let status=recorder_status::summary(&coordinator);let busy=handle.state::<Control>().busy.load(Ordering::SeqCst);
+                let _=start.set_enabled(!busy&&status["state"]=="stopped");
+                let _=stop.set_enabled(!busy&&coordinator["configured"]==true&&matches!(status["state"].as_str(),Some("recording"|"attention"|"unknown")));
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }});Ok(())
         }).build(tauri::generate_context!()).expect("Unable to start PC Diagnostics");

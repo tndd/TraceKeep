@@ -9,6 +9,8 @@ const HISTORY: usize = 450;
 pub mod recorder_status;
 #[cfg(windows)]
 pub mod desktop;
+#[cfg(windows)]
+pub mod tray_temperature;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -66,9 +68,12 @@ fn compact(kind: &str, row: &Value) -> Value {
 pub struct LogReader {
     root: PathBuf, prefix: String, path: Option<PathBuf>, offset: u64, pending: Vec<u8>,
     pub rows: VecDeque<Value>, pub error: Option<String>, invalid: u64,
+    max_read: u64, history: usize,
 }
 impl LogReader {
-    pub fn new(root: PathBuf, prefix: &str) -> Self { Self {root,prefix:prefix.into(),path:None,offset:0,pending:vec![],rows:VecDeque::new(),error:None,invalid:0} }
+    pub fn new(root: PathBuf, prefix: &str) -> Self { Self {root,prefix:prefix.into(),path:None,offset:0,pending:vec![],rows:VecDeque::new(),error:None,invalid:0,max_read:MAX_READ,history:HISTORY} }
+    /// Tray-only reader: bounded CPU tail, no dashboard history or other streams.
+    pub fn latest_only(root: PathBuf, prefix: &str) -> Self { let mut reader=Self::new(root,prefix);reader.max_read=256*1024;reader.history=1;reader }
     pub fn update(&mut self) { self.error = self.read().err().map(|e| e.to_string()); }
     fn read(&mut self) -> std::io::Result<()> {
         if !self.root.exists() { return Ok(()); }
@@ -79,16 +84,16 @@ impl LogReader {
         let mut file = File::open(path)?;
         let size = file.metadata()?.len();
         if size < self.offset { self.offset = 0; self.pending.clear(); self.rows.clear(); }
-        let skip = size.saturating_sub(self.offset) > MAX_READ;
-        if skip { self.offset = size - MAX_READ; self.pending.clear(); }
+        let skip = size.saturating_sub(self.offset) > self.max_read;
+        if skip { self.offset = size - self.max_read; self.pending.clear(); }
         file.seek(SeekFrom::Start(self.offset))?;
         let mut bytes = Vec::new();
-        let read = file.take(MAX_READ).read_to_end(&mut bytes)?;
+        let read = file.take(self.max_read).read_to_end(&mut bytes)?;
         self.offset += read as u64;
         if skip { if let Some(i) = bytes.iter().position(|b| *b == b'\n') { bytes.drain(..=i); } else { bytes.clear(); } }
         self.pending.extend(bytes);
         let Some(end) = self.pending.iter().rposition(|b| *b == b'\n') else {
-            if self.pending.len() > MAX_READ as usize { self.pending.clear(); self.invalid += 1; }
+            if self.pending.len() > self.max_read as usize { self.pending.clear(); self.invalid += 1; }
             return Ok(());
         };
         let complete: Vec<u8> = self.pending.drain(..=end).collect();
@@ -96,7 +101,7 @@ impl LogReader {
             if line.iter().all(u8::is_ascii_whitespace) { continue; }
             let line = line.strip_prefix(&[0xef,0xbb,0xbf]).unwrap_or(line);
             match serde_json::from_slice::<Value>(line) {
-                Ok(row) if row_time(&row).is_some() => { self.rows.push_back(row); if self.rows.len() > HISTORY { self.rows.pop_front(); } }
+                Ok(row) if row_time(&row).is_some() => { self.rows.push_back(row); if self.rows.len() > self.history { self.rows.pop_front(); } }
                 _ => self.invalid += 1,
             }
         }
@@ -172,4 +177,13 @@ mod tests {
         let mut reader=LogReader::new(dir.0.clone(),"board-auto-");reader.update();fs::rename(&a,dir.0.join("archived.txt")).unwrap();
         fs::write(dir.0.join("board-auto-2.jsonl"),format!("{}\n",json!({"time":Utc::now().to_rfc3339(),"sequence":2}))).unwrap();reader.update();assert_eq!(reader.rows.len(),2);assert_eq!(reader.rows.back().unwrap()["sequence"],2);
     }
+    #[test] fn latest_only_reader_is_bounded_and_handles_partial_tail() {
+        let dir=Fixture::new();let path=dir.0.join("cpu-auto-test.jsonl");
+        let mut text=String::new();for sequence in 0..4000 {text.push_str(&format!("{}\n",json!({"time":Utc::now().to_rfc3339(),"sequence":sequence,"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"})));}
+        text.push_str("{\"time\":");fs::write(&path,text).unwrap();
+        let mut r=LogReader::latest_only(dir.0.clone(),"cpu-auto-");r.update();
+        assert_eq!(r.rows.len(),1);assert_eq!(r.rows.back().unwrap()["sequence"],3999);assert!(r.pending.len()<256*1024);
+        fs::write(&path,format!("{}\n",json!({"time":Utc::now().to_rfc3339(),"sequence":1}))).unwrap();r.update();assert_eq!(r.rows.len(),1);assert_eq!(r.rows.back().unwrap()["sequence"],1);
+    }
+
 }

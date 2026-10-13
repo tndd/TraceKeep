@@ -55,7 +55,7 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     };
     if let Some(window)=app.get_webview_window(label){window.unminimize().map_err(|e|e.to_string())?;window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;return Ok(());}
     let mut builder=tauri::WebviewWindowBuilder::new(app,label,tauri::WebviewUrl::App(url.into()))
-        .title(title).inner_size(width,height).min_inner_size(if view=="mini"{380.}else{720.},if view=="mini"{520.}else{600.});
+        .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{380.}else{720.},if view=="mini"{520.}else{600.});
     if view=="mini" {
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();
             builder=builder.position((pos.x as f64+size.width as f64-width*scale-20.*scale)/scale,(pos.y as f64+size.height as f64-height*scale-60.*scale).max(pos.y as f64)/scale);}
@@ -107,7 +107,6 @@ fn main(){
                     "quit"=>{let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),"stop".into(),true).await.is_err(){let _=show_view(&app,"mini");}});},_=>{}
                 })
                 .on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){request_view(tray.app_handle(),"mini");}}).build(app)?;
-            if view!="tray"{show_view(app.handle(),view).map_err(std::io::Error::other)?;}
             let handle=app.handle().clone();
             std::thread::spawn(move||{let mut previous=String::new();loop{
                 if let Some(view)=instance.requested_view(){let _=show_view(&handle,view);}
@@ -117,5 +116,11 @@ fn main(){
             }});Ok(())
         }).build(tauri::generate_context!()).expect("Unable to start PC Diagnostics");
     // Closing the final window releases its WebView; the native tray stays alive.
-    app.run(|_,event|{if let tauri::RunEvent::ExitRequested{code:None,api,..}=event{api.prevent_exit();}});
+    app.run(move|app,event|match event {
+        // Display only after the event handlers are ready. A visible window during
+        // setup can receive WM_CLOSE before the application's close handler exists.
+        tauri::RunEvent::Ready if view!="tray"=>request_view(app,view),
+        tauri::RunEvent::ExitRequested{code:None,api,..}=>api.prevent_exit(),
+        _=>{}
+    });
 }

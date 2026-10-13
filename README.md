@@ -146,8 +146,8 @@ seconds. Historical temperatures are never presented as current tray readings.
 `pcdiag history START_RFC3339 END_RFC3339` exposes the same read-only Rust query in JSON.
 The viewer's period export goes into the existing per-user snapshots directory.
 
-Read bounds are explicit: at most four nearby dated files per stream, 128 MiB from each
-file's tail, 100,000 rows and 32 MiB retained output per stream. Large-file tails, invalid
+Read bounds are explicit: at most four local-date files per stream, 512 MiB streamed from the start of each
+file, 100,000 rows and 32 MiB retained output per stream. Oversized files, invalid
 lines, unresolved unchanged-result references and read failures are reported. A clipped
 range is not complete coverage. The last two process/GPU-detail samples are retained;
 CPU, board, activity, performance, event and storage records use the bounded full range.

@@ -1,9 +1,9 @@
 //! Bounded, read-only saved-log queries shared by CLI and desktop.
 use crate::{Sources,machine_dir};
-use chrono::{DateTime,Utc};
+use chrono::{DateTime,Utc,Local};
 use serde_json::{json,Value};
-use std::{collections::{BTreeMap,VecDeque},fs::{self,File},io::{Read,Seek,SeekFrom},path::Path};
-const FILE_LIMIT:u64=128*1024*1024;
+use std::{collections::{BTreeMap,VecDeque},fs::{self,File},io::{Read,BufRead,BufReader},path::Path};
+const FILE_LIMIT:u64=512*1024*1024;
 const ROW_LIMIT:usize=100_000;
 const OUTPUT_LIMIT:usize=32*1024*1024;
 pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
@@ -25,20 +25,24 @@ fn compact(prefix:&str,mut row:Value)->Value{
 fn read_stream(root:&Path,prefix:&str,a:i64,b:i64)->Value{
     let mut issues=vec![];let mut invalid=0;let mut incomplete=0;let mut unresolved=0;let mut clipped=false;let mut rows=VecDeque::new();let mut bytes_out=0;let mut cache:BTreeMap<String,Value>=BTreeMap::new();
     let files=match fs::read_dir(root){Ok(v)=>v,Err(e)=>return json!({"rows":[],"issues":[e.to_string()],"truncated":false})};
-    // Dates in log filenames are local dates. Include adjacent UTC dates for any timezone.
-    let min=DateTime::from_timestamp_millis(a-86_400_000).unwrap().format("%Y%m%d").to_string();
-    let max=DateTime::from_timestamp_millis(b+86_400_000).unwrap().format("%Y%m%d").to_string();
+    // Collectors name files using the recording machine's local calendar.
+    let min=DateTime::from_timestamp_millis(a).unwrap().with_timezone(&Local).format("%Y%m%d").to_string();
+    let max=DateTime::from_timestamp_millis(b-1+if prefix=="events-"{86_400_000}else{0}).unwrap().with_timezone(&Local).format("%Y%m%d").to_string();
     let mut paths=files.filter_map(Result::ok).map(|e|e.path()).filter(|p|p.file_name().and_then(|n|n.to_str()).is_some_and(|n|n.strip_prefix(prefix).and_then(|s|s.strip_suffix(".jsonl")).is_some_and(|s|s.len()==8&&s>=min.as_str()&&s<=max.as_str()))).collect::<Vec<_>>();paths.sort();
     for path in paths.into_iter().take(4){
         let result=(||->Result<(),String>{
-            let mut file=File::open(&path).map_err(|e|e.to_string())?;let len=file.metadata().map_err(|e|e.to_string())?.len();let offset=len.saturating_sub(FILE_LIMIT);
-            file.seek(SeekFrom::Start(offset)).map_err(|e|e.to_string())?;
-            let mut bytes=Vec::new();file.take(FILE_LIMIT).read_to_end(&mut bytes).map_err(|e|e.to_string())?;
-            let from=if offset>0{clipped=true;bytes.iter().position(|b|*b==b'\n').map(|i|i+1).unwrap_or(bytes.len())}else{0};
-            let end=bytes.iter().rposition(|b|*b==b'\n').map(|i|i+1).unwrap_or(from);if end<bytes.len(){incomplete+=1;}
-            for line in bytes[from..end.max(from)].split(|b|*b==b'\n'){
+            let file=File::open(&path).map_err(|e|e.to_string())?;
+            if file.metadata().map_err(|e|e.to_string())?.len()>FILE_LIMIT{clipped=true;}
+            let mut reader=BufReader::new(file.take(FILE_LIMIT));let mut discarding=false;
+            loop {
+                let mut line=Vec::new();
+                // Bound even a malformed single line, while continuing after its newline.
+                let count=Read::by_ref(&mut reader).take(4*1024*1024).read_until(b'\n',&mut line).map_err(|e|e.to_string())?;
+                if count==0{break;}
+                if line.last()!=Some(&b'\n') {if count==4*1024*1024{if !discarding{invalid+=1;}discarding=true;}else{incomplete+=1;}continue;}
+                if discarding{discarding=false;continue;}
                 if line.iter().all(u8::is_ascii_whitespace){continue;}
-                let line=line.strip_prefix(&[239,187,191]).unwrap_or(line);
+                let line=line.strip_prefix(&[239,187,191]).unwrap_or(&line);
                 let mut r=match serde_json::from_slice::<Value>(line){Ok(r)=>r,Err(_)=>{invalid+=1;continue;}};
                 if let Some(hash)=r["sha256"].as_str().map(str::to_owned){
                     if !r["result"].is_null(){if cache.len()>=64{cache.clear();}cache.insert(hash,r["result"].clone());}

@@ -6,6 +6,13 @@ use tauri::{Manager,menu::{Menu,MenuItem,CheckMenuItem},tray::{TrayIconBuilder,T
 type Shared=Arc<Mutex<Monitor>>;
 static VIEW_LOCK:Mutex<()>=Mutex::new(());
 static HISTORY_BUSY:AtomicBool=AtomicBool::new(false);
+// Local UI health marker for diagnosing blank or failed WebView loads. No log content.
+#[tauri::command]
+fn report_workspace_state(ready:bool,message:String)->Result<(),String>{
+    let root=diagnostics_core::app_dir();std::fs::create_dir_all(&root).map_err(|e|e.to_string())?;
+    let value=json!({"ready":ready,"message":message.chars().take(500).collect::<String>(),"pid":std::process::id(),"time":chrono::Utc::now().to_rfc3339()});
+    std::fs::write(root.join("workspace-state.json"),value.to_string()).map_err(|e|e.to_string())
+}
 #[tauri::command]
 async fn query_history(start:String,end:String)->Result<Value,String>{
     if HISTORY_BUSY.swap(true,Ordering::SeqCst){return Err("記録を読み込み中です。".into());}
@@ -101,7 +108,7 @@ fn main(){
     let Some(instance)=desktop::Instance::acquire(view).expect("Unable to register tray instance") else{return;};
     let sources=Sources::load().unwrap_or_default();
     let app=tauri::Builder::default().manage(Arc::new(Mutex::new(Monitor::new(sources)))).manage(Control::default())
-        .invoke_handler(tauri::generate_handler![get_snapshot,save_snapshot,set_sources,viewer_state,set_viewer_startup,recorder_action,open_view,query_history,export_history_view,configure_module])
+        .invoke_handler(tauri::generate_handler![get_snapshot,save_snapshot,set_sources,viewer_state,set_viewer_startup,recorder_action,open_view,query_history,export_history_view,configure_module,report_workspace_state])
         .on_window_event(|window,event|{
             if let tauri::WindowEvent::CloseRequested{api,..}=event{
                 api.prevent_close();

@@ -4,6 +4,7 @@ use std::sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}};
 use serde_json::{json,Value};
 use tauri::{Manager,menu::{Menu,MenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
 type Shared=Arc<Mutex<Monitor>>;
+static VIEW_LOCK:Mutex<()>=Mutex::new(());
 #[derive(Default)]struct Control {busy:AtomicBool,message:Mutex<String>}
 
 #[tauri::command]
@@ -46,6 +47,7 @@ async fn control(app:tauri::AppHandle,action:String,exit_after:bool)->Result<(),
 async fn recorder_action(app:tauri::AppHandle,action:String)->Result<(),String>{control(app,action,false).await}
 
 fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
+    let _opening=VIEW_LOCK.lock().map_err(|e|e.to_string())?;
     let (label,url,title,width,height)=match view {
         "mini"=>("mini","mini.html","PC Diagnostics · ミニモニター",430.,620.),
         "full"=>("main","index.html","PC Diagnostics · 詳細",1320.,900.),
@@ -63,6 +65,11 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
 }
 #[tauri::command]
 async fn open_view(app:tauri::AppHandle,view:String)->Result<(),String>{show_view(&app,&view)}
+fn request_view(app:&tauri::AppHandle,view:&str){
+    let app=app.clone();let view=view.to_owned();
+    // WebView2 creation must not block a synchronous Windows event handler.
+    tauri::async_runtime::spawn_blocking(move||{let _=show_view(&app,&view);});
+}
 
 fn tray_icon(state:&str)->tauri::image::Image<'static>{
     let color=match state{"recording"=>[78,224,181,255],"stopped"|"stopping"=>[147,157,175,255],_=>[255,188,92,255]};
@@ -85,7 +92,8 @@ fn main(){
                 api.prevent_close();
                 // Preventing automatic app exit alone also cancels the last close on Windows.
                 // Destroy this window explicitly; the tray's event loop remains alive.
-                let _=window.destroy();
+                let window=window.clone();
+                tauri::async_runtime::spawn_blocking(move||{let _=window.destroy();});
             }
         })
         .setup(move|app|{
@@ -96,14 +104,14 @@ fn main(){
             TrayIconBuilder::with_id("diagnostics").icon(tray_icon("unknown")).tooltip("PC Diagnostics · 記録を確認中")
                 .menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(|app,event|match event.id.as_ref(){
-                    "mini"|"full"=>{let _=show_view(app,event.id.as_ref());},
+                    "mini"|"full"=>request_view(app,event.id.as_ref()),
                     "quit"=>{let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),"stop".into(),true).await.is_err(){let _=show_view(&app,"mini");}});},_=>{}
                 })
-                .on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){let _=show_view(tray.app_handle(),"mini");}}).build(app)?;
+                .on_tray_icon_event(|tray,event|{if matches!(event,TrayIconEvent::Click{button:MouseButton::Left,button_state:MouseButtonState::Up,..}){request_view(tray.app_handle(),"mini");}}).build(app)?;
             if view!="tray"{show_view(app.handle(),view).map_err(std::io::Error::other)?;}
             let handle=app.handle().clone();
             std::thread::spawn(move||{let mut previous=String::new();loop{
-                if let Some(view)=instance.requested_view(){let app=handle.clone();let _=handle.run_on_main_thread(move||{let _=show_view(&app,view);});}
+                if let Some(view)=instance.requested_view(){let _=show_view(&handle,view);}
                 let status=recorder_status::summary(&recorder_status::read_coordinator());let state=status["state"].as_str().unwrap_or("unknown");
                 if state!=previous{previous=state.into();if let Some(tray)=handle.tray_by_id("diagnostics"){let _=tray.set_icon(Some(tray_icon(state)));let _=tray.set_tooltip(Some(format!("PC Diagnostics · {}",status["label"].as_str().unwrap_or("確認が必要"))));}}
                 std::thread::sleep(std::time::Duration::from_secs(2));

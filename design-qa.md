@@ -51,6 +51,14 @@ P3: small-text rasterization and tray readability vary with Windows display scal
 
 final result: passed
 
+## Compact mini follow-up (2026-10-14)
+
+The later compact layout supersedes the original 300 × 228 size and footer described above. Source revision: 5831b77. The details action uses the bundled Heroicons expand symbol. The redundant recording footer is removed; the five independently labelled collector lamps remain. Error notices remain available.
+
+The default content size is 300 × 202, with a 280 × 202 minimum. Browser verification at both widths found no horizontal or vertical overflow. The expand action opened the full dashboard. JavaScript syntax checks and all eight mini state tests passed. The private screenshot uses explicitly labelled synthetic temperatures and is kept outside the repository. The temporary viewport override was reset. Native verification is tracked by Windows CI; native pixels are not accessible through the current computer-use interface.
+
+final result: passed (browser layout and interaction)
+
 ## Full device workspace — production integration (2026-10-14)
 
 Tested executable source: `04c569530e65536c55b33b41dd7969089446fa69`.

@@ -50,3 +50,27 @@ P3: small-text rasterization and tray readability vary with Windows display scal
 - [x] Local-only assets
 
 final result: passed
+
+## Full device workspace — production integration (2026-10-14)
+
+Tested executable source: `04c569530e65536c55b33b41dd7969089446fa69`.
+Windows CI run: 38459086631, completed successfully (frontend, recorder/evidence migration, Rust, release build and tray lifecycle tests).
+
+Reference: accepted device workspace at local port 8771, captured during this turn after the requested CPU panel revision. Implementation: production frontend at local port 8772, using output from the compiled `pcdiag history` command. Private reference and implementation screenshots remain outside this repository in local outputs; no real logs or screenshots are published.
+
+Visual review compared both screenshots together. The temporary browser viewport was requested at 1320 by 900; per-tab browser scaling produced different effective capture sizes, so the comparison assessed layout proportions and content rather than exact pixels. Full-page capture showed a browser capture crop/sticky-position artifact; viewport screenshots and DOM bounds were used to verify the actual visible layout. The override was reset afterwards.
+
+- Preserved the navy/cyan palette, left navigation, summary metric strip, six representative device panels and event/coverage section.
+- CPU summary now pairs measured load and temperature in a scatterplot with marginal empirical distributions. Labels, units, paired sample count and missing-data behavior are present.
+- GPU state chords, interval disk-latency box plots, board-voltage frequencies, process-family packing and power-limit heat cells retain distinct visual forms.
+- Events use five-minute cells, severity colors and counts when space permits. Cell selection, multiple-event selection, linked sensor time and raw-record drawer were verified with real saved records.
+- All device pages and empty-source states were checked. Missing values remain unavailable; invalid/reset counters are excluded. No new browser console errors remain after fixing the initial missing context import.
+- The period toolbar and actual recorder controls intentionally replace the mock banner and simulated controls. History is manually loaded in two-hour windows; recorder state is polled separately.
+- Native installed viewer reported a fresh successful workspace render. Native pixels are not available to current computer-use tools; browser verification uses the same compiled frontend assets.
+- Replacing only the per-user viewer preserved the recorder PID and all five worker PIDs. All workers continued recording with zero reported errors.
+
+Read-only verification of a two-hour saved-log window returned all expected CPU/board/activity samples and events without truncation, invalid records or unresolved references. Process and GPU-detail payloads intentionally retain only their last two samples in a window, as documented in the UI.
+
+No actionable P0/P1/P2 visual findings remain within the reviewed desktop layouts. P3: verify additional physical display scaling if requested; extremely narrow chart cells omit their visible counts but retain accessible labels.
+
+final result: passed

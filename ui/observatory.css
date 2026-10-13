@@ -982,3 +982,5 @@ input::placeholder {
     scroll-behavior: auto;
   }
 }
+
+img.logo-mark{object-fit:contain;background:transparent;border:0;padding:0}

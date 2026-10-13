@@ -43,6 +43,8 @@ jobs:
           key: windows-rust-${{ hashFiles('src-tauri/Cargo.toml', 'src-tauri/Cargo.lock') }}-${{ github.sha }}
           restore-keys: windows-rust-
       - name: Rust tests
+        env:
+          PCDIAG_ICON_PREVIEW_DIR: ${{ runner.temp }}/tray-icons
         working-directory: src-tauri
         run: cargo +stable test --release --locked
       - name: Build desktop executable
@@ -58,6 +60,7 @@ jobs:
           Copy-Item management,collectors,docs -Destination package -Recurse
           Copy-Item scripts/Install-Tray.ps1 -Destination package
           Copy-Item README.md -Destination package
+          Copy-Item (Join-Path $env:RUNNER_TEMP 'tray-icons') -Destination package/test-previews -Recurse
           $files = @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
           $manifest = @{files=@($files | ForEach-Object {@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path 'package' $_) -Algorithm SHA256).Hash}})}
           [IO.File]::WriteAllText((Join-Path $PWD 'package/update-manifest.json'),($manifest | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))

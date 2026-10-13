@@ -20,7 +20,7 @@ pub fn display(coordinator: &Value, reader: &LogReader, now: i64) -> Display {
     let value=if matches!(state,"recording"|"attention")&&valid_worker&&reader.error.is_none(){temperature}else{None};
     let text=if stopped {"Ⅱ".into()}else{value.map(|t|format!("{:.0}°",t)).unwrap_or_else(||"—".into())};
     let detail=if stopped {"CPU温度表示は停止中".into()}else if disabled {"CPUは収集対象外".into()}else{value.map(|t|format!("CPU {t:.1} °C")).unwrap_or_else(||"CPUの最新温度を確認できません".into())};
-    Display{text,tooltip:format!("PC Diagnostics · {detail}\n{label}"),color:if stopped||disabled{[156,169,182]}else if state=="recording"&&value.is_some(){[100,231,207]}else{[255,191,102]}}
+    Display{text,tooltip:format!("TraceKeep · {detail}\n{label}"),color:if stopped||disabled{[156,169,182]}else if state=="recording"&&value.is_some(){[100,231,207]}else{[255,191,102]}}
 }
 
 /// GDI draws white text into an isolated bitmap, never onto a desktop/window.
@@ -76,5 +76,5 @@ pub fn render(display: &Display) -> Result<Vec<u8>,String> {
     }
     #[test]fn fresh_stale_and_stop_are_distinct(){let(mut c,r,n)=fixture();assert_eq!(display(&c,&r,n).text,"57°");assert_eq!(display(&c,&r,n+10001).text,"—");assert_eq!(display(&c,&r,n-1).text,"—");c["stopRequested"]=json!(true);assert_eq!(display(&c,&r,n).text,"Ⅱ");}
     #[test]fn missing_disabled_and_failed_never_show_last_temperature(){let(mut c,mut r,n)=fixture();c["runtime"]["workers"][0]["enabled"]=json!(false);assert_eq!(display(&c,&r,n).text,"—");c["runtime"]["workers"][0]["enabled"]=json!(true);r.error=Some("read failed".into());assert_eq!(display(&c,&r,n).text,"—");r.error=None;r.rows.clear();assert_eq!(display(&c,&r,n).text,"—");}
-    #[test]fn three_digits_and_rendering(){let(c,mut r,n)=fixture();r.rows[0]["sensors"][0]["value"]=json!(100.0);let d=display(&c,&r,n);assert_eq!(d.text,"100°");for text in ["57°","100°","—","Ⅱ"]{let pixels=render(&Display{text:text.into(),tooltip:String::new(),color:[100,231,207]}).unwrap();assert_eq!(pixels.len(),64*64*4);assert!(pixels[..58*64*4].chunks_exact(4).filter(|p|p[3]>0).count()>100);assert!(pixels.chunks_exact(4).any(|p|p[3]==0));}}
+    #[test]fn three_digits_and_rendering(){let(c,mut r,n)=fixture();r.rows[0]["sensors"][0]["value"]=json!(100.0);let d=display(&c,&r,n);assert_eq!(d.text,"100°");for (index,text) in ["57°","100°","—","Ⅱ"].into_iter().enumerate(){let pixels=render(&Display{text:text.into(),tooltip:String::new(),color:[100,231,207]}).unwrap();if let Ok(dir)=std::env::var("PCDIAG_ICON_PREVIEW_DIR"){std::fs::create_dir_all(&dir).unwrap();std::fs::write(std::path::Path::new(&dir).join(format!("tray-{index}.rgba")),&pixels).unwrap();}assert_eq!(pixels.len(),64*64*4);assert!(pixels[..58*64*4].chunks_exact(4).filter(|p|p[3]>0).count()>100);assert!(pixels.chunks_exact(4).any(|p|p[3]==0));}}
 }

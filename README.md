@@ -1,4 +1,4 @@
-# PC Diagnostics
+# TraceKeep
 
 A **CUI-first Windows recorder** for investigating unexpected power loss. The Rust `pcdiag` command controls one boot task with isolated CPU, motherboard and GPU/Windows workers. Tauri is an optional viewer of the same logs.
 
@@ -126,3 +126,5 @@ Verification includes Rust log-reader tests, visualization semantics, legacy mut
 The notification icon displays the latest saved CPU temperature rounded to whole degrees every two seconds. Hover for the decimal reading and recorder state. `Ⅱ` means recording is stopped/stopping; `—` means the latest temperature is unavailable, disabled, stale (over ten seconds), or untrusted. The small accent indicates recording status, not an overheating diagnosis. The current CPU mapping is the same AMD Tctl/Tdie sensor used by the dashboard.
 
 When all windows are closed, only a bounded CPU log tail (256 KiB per read, one retained sample) and the recorder heartbeat are read. No additional hardware poller is started. The compact monitor shows CPU/GPU temperatures and five recording lamps; amber denotes a missing/stale/error condition, gray denotes stopped/opted out. Hover or keyboard focus exposes each lamp's state. Recording start/stop and login startup are in the tray context menu. Window X still returns to the tray, while explicit Exit stops recording before exiting.
+
+TraceKeep is the product display name. Existing `pcdiag` commands, executable names, scheduled task and data paths remain compatible with previous installations.

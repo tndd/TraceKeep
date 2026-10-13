@@ -49,13 +49,13 @@ async fn recorder_action(app:tauri::AppHandle,action:String)->Result<(),String>{
 fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     let _opening=VIEW_LOCK.lock().map_err(|e|e.to_string())?;
     let (label,url,title,width,height)=match view {
-        "mini"=>("mini","mini.html","PC Diagnostics · ミニモニター",300.,236.),
-        "full"=>("main","index.html","PC Diagnostics · 詳細",1320.,900.),
+        "mini"=>("mini","mini.html","TraceKeep · ミニモニター",300.,204.),
+        "full"=>("main","index.html","TraceKeep · 詳細",1320.,900.),
         _=>return Err("Unknown view".into())
     };
     if let Some(window)=app.get_webview_window(label){window.unminimize().map_err(|e|e.to_string())?;window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;return Ok(());}
     let mut builder=tauri::WebviewWindowBuilder::new(app,label,tauri::WebviewUrl::App(url.into()))
-        .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{280.}else{720.},if view=="mini"{218.}else{600.});
+        .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{280.}else{720.},if view=="mini"{190.}else{600.});
     if view=="mini" {
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();
             builder=builder.position((pos.x as f64+size.width as f64-width*scale-20.*scale)/scale,(pos.y as f64+size.height as f64-height*scale-60.*scale).max(pos.y as f64)/scale);}
@@ -97,13 +97,13 @@ fn main(){
             let quit=MenuItem::with_id(app,"quit","記録を停止して終了…",true,None::<&str>)?;
             let start=MenuItem::with_id(app,"start","記録を開始",true,None::<&str>)?;
             let stop=MenuItem::with_id(app,"stop","記録を停止…",true,None::<&str>)?;
-            let startup=CheckMenuItem::with_id(app,"startup","ログオン時にトレイを表示",true,desktop::startup_status().unwrap_or(false),None::<&str>)?;
+            let startup=CheckMenuItem::with_id(app,"startup","ログオン時にトレイを表示",true,desktop::startup_status().ok().flatten().is_some(),None::<&str>)?;
             let menu=Menu::with_items(app,&[&mini,&full,&start,&stop,&startup,&quit])?;
-            TrayIconBuilder::with_id("diagnostics").icon(tray_icon(&tray_temperature::Display{text:"—".into(),tooltip:String::new(),color:[255,191,102]})).tooltip("PC Diagnostics · 記録を確認中")
+            TrayIconBuilder::with_id("diagnostics").icon(tray_icon(&tray_temperature::Display{text:"—".into(),tooltip:String::new(),color:[255,191,102]})).tooltip("TraceKeep · 記録を確認中")
                 .menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(move|app,event|match event.id.as_ref(){
                     "mini"|"full"=>request_view(app,event.id.as_ref()),
-                    "startup"=>{let result=desktop::startup_status().and_then(|current|std::env::current_exe().map_err(|e|e.to_string()).and_then(|exe|desktop::set_startup(!current,&exe)));let _=startup.set_checked(desktop::startup_status().unwrap_or(false));if let Err(e)=result{if let Ok(mut m)=app.state::<Control>().message.lock(){*m=e;}request_view(app,"mini");}},
+                    "startup"=>{let result=desktop::startup_status().and_then(|current|std::env::current_exe().map_err(|e|e.to_string()).and_then(|exe|desktop::set_startup(current.is_none(),&exe)));let _=startup.set_checked(desktop::startup_status().ok().flatten().is_some());if let Err(e)=result{if let Ok(mut m)=app.state::<Control>().message.lock(){*m=e;}request_view(app,"mini");}},
                     "start"|"stop"=>{let action=event.id.as_ref().to_string();let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),action,false).await.is_err(){let _=show_view(&app,"mini");}});},
                     "quit"=>{let app=app.clone();tauri::async_runtime::spawn(async move{if control(app.clone(),"stop".into(),true).await.is_err(){let _=show_view(&app,"mini");}});},_=>{}
                 })
@@ -129,7 +129,7 @@ fn main(){
                 let _=stop.set_enabled(!busy&&coordinator["configured"]==true&&matches!(status["state"].as_str(),Some("recording"|"attention"|"unknown")));
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }});Ok(())
-        }).build(tauri::generate_context!()).expect("Unable to start PC Diagnostics");
+        }).build(tauri::generate_context!()).expect("Unable to start TraceKeep");
     // Closing the final window releases its WebView; the native tray stays alive.
     app.run(move|app,event|match event {
         // Display only after the event handlers are ready. A visible window during

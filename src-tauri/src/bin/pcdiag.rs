@@ -31,7 +31,7 @@ fn latest_evidence(prefix:&str)->Value{
     result.unwrap_or_else(|e|json!({"error":e,"path":path}))
 }
 fn display(v:&Value){
-    println!("PC Diagnostics  {}",v["time"].as_str().unwrap_or(""));
+    println!("TraceKeep  {}",v["time"].as_str().unwrap_or(""));
     for k in ["cpu","board","activity"]{let s=&v["streams"][k];println!("{k:10} {:12} age={}s  {}",if intentionally_disabled(v,k){"disabled"}else{s["state"].as_str().unwrap_or("unknown")},s["age"],s["path"].as_str().unwrap_or("no log"));}
     let last=|key:&str|v["streams"][key]["history"].as_array().and_then(|a|a.last()).cloned().unwrap_or(Value::Null);
     let cpu=last("cpu");let board=last("board");let gpu=last("activity");

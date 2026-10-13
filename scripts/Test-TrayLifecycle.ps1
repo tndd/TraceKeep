@@ -14,7 +14,7 @@ public static class TrayWindows {
   [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
   [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr h,StringBuilder b,int n);
   [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr h,uint m,IntPtr w,IntPtr l);
-  public static IntPtr[] Visible(int pid) {var list=new List<IntPtr>();EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var name=new StringBuilder(256);GetWindowText(h,name,256);if(owner==pid&&IsWindowVisible(h)&&name.ToString().StartsWith("PC Diagnostics"))list.Add(h);return true;},IntPtr.Zero);return list.ToArray();}
+  public static IntPtr[] Visible(int pid) {var list=new List<IntPtr>();EnumWindows((h,p)=>{uint owner;GetWindowThreadProcessId(h,out owner);var name=new StringBuilder(256);GetWindowText(h,name,256);if(owner==pid&&IsWindowVisible(h)&&name.ToString().StartsWith("TraceKeep"))list.Add(h);return true;},IntPtr.Zero);return list.ToArray();}
 }
 '@
 $fixture=Join-Path $env:TEMP ('pcdiag-tray-'+[Guid]::NewGuid().ToString('N'))

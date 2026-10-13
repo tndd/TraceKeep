@@ -87,7 +87,7 @@ fn run()->Result<i32,String>{
     if command=="logs"{println!("{}",serde_json::to_string_pretty(&sources).unwrap());return Ok(0);}
     let mut monitor=Monitor::new(sources);
     loop{
-        let mut v=monitor.snapshot();
+        let mut v=monitor.unified_snapshot();
         if command=="export"{println!("{}",export_snapshot(&v)?.display());return Ok(0);}
         let extended_ok=v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().any(|w|w["name"]=="extended"&&w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0)));
         if command=="doctor"{v["coverage"]=read_json(machine_dir().join("coverage.json"));}

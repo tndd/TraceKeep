@@ -9,13 +9,13 @@ type Shared=Arc<Mutex<Monitor>>;
 #[tauri::command]
 async fn get_snapshot(state:tauri::State<'_,Shared>)->Result<Value,String>{
     let state=state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move||state.lock().map_err(|e|e.to_string()).map(|mut m|m.snapshot())).await.map_err(|e|e.to_string())?
+    tauri::async_runtime::spawn_blocking(move||state.lock().map_err(|e|e.to_string()).map(|mut m|m.unified_snapshot())).await.map_err(|e|e.to_string())?
 }
 #[tauri::command]
 async fn save_snapshot(state:tauri::State<'_,Shared>)->Result<String,String>{
     let state=state.inner().clone();
     tauri::async_runtime::spawn_blocking(move||{
-        let snapshot=state.lock().map_err(|e|e.to_string())?.snapshot();
+        let snapshot=state.lock().map_err(|e|e.to_string())?.unified_snapshot();
         export_snapshot(&snapshot).map(|p|p.to_string_lossy().into_owned())
     }).await.map_err(|e|e.to_string())?
 }
@@ -58,7 +58,8 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();
             builder=builder.position((pos.x as f64+size.width as f64-width*scale-20.*scale)/scale,(pos.y as f64+size.height as f64-height*scale-60.*scale).max(pos.y as f64)/scale);}
     }
-    builder.build().map_err(|e|e.to_string())?.set_focus().map_err(|e|e.to_string())?;Ok(())
+    let window=builder.build().map_err(|e|e.to_string())?;
+    window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;Ok(())
 }
 #[tauri::command]
 async fn open_view(app:tauri::AppHandle,view:String)->Result<(),String>{show_view(&app,&view)}

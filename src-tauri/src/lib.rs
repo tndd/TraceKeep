@@ -123,7 +123,10 @@ impl Monitor {
         for reader in self.readers.values_mut() { reader.update(); }
         let streams: BTreeMap<_,_> = self.readers.iter().map(|(key,r)|(key,r.view(key,now.timestamp_millis()))).collect();
         let events:Vec<Value> = self.readers["events"].rows.iter().rev().take(20).map(|r|json!({"time":r["time"],"provider":r["provider"],"id":r["id"],"level":r["level"]})).collect();
-        let mut snapshot=json!({"app":"PC Diagnostics","version":2,"time":now.to_rfc3339(),"streams":streams,"events":events,"sources":self.sources});
+        json!({"app":"PC Diagnostics","version":2,"time":now.to_rfc3339(),"streams":streams,"events":events,"sources":self.sources})
+    }
+    pub fn unified_snapshot(&mut self) -> Value {
+        let mut snapshot=self.snapshot();
         snapshot["coordinator"]=recorder_status::read_coordinator();
         snapshot["recorder"]=recorder_status::summary(&snapshot["coordinator"]);
         if let Some(workers)=snapshot["coordinator"]["runtime"]["workers"].as_array().cloned() {

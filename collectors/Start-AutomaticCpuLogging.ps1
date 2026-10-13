@@ -1,4 +1,4 @@
-param([int]$MaxSamples = 0, [switch]$Probe, [string]$LogRoot, [string]$LibraryDirectory)
+param([int]$MaxSamples = 0, [switch]$Probe, [string]$LogRoot, [string]$LibraryDirectory, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
 $root = $LogRoot
 if (-not $root) { $root = Join-Path $PSScriptRoot 'sensor-logs' }
@@ -41,6 +41,9 @@ try {
         $temperatures = @($readings | Where-Object { $_.type -eq 'Temperature' -and $_.value -gt 0 -and $_.value -lt 150 })
         if ($temperatures.Count -eq 0) { throw 'No usable CPU temperature was obtained. Automatic CPU logging has not been verified.' }
         $record = [ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; sequence=$sample; sampleDurationMs=$clock.ElapsedMilliseconds; sensors=$readings}
+        $record.monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp()
+        $record.monotonicFrequency=[Diagnostics.Stopwatch]::Frequency
+        $record.intervalMilliseconds=$IntervalMilliseconds
         if ($Probe) {
             $record | ConvertTo-Json -Depth 6
         } else {
@@ -57,7 +60,7 @@ try {
         }
         $sample++
         if ($MaxSamples -gt 0 -and $sample -ge $MaxSamples) { break }
-        Start-Sleep -Milliseconds ([Math]::Max(1, 2000 - [int]$clock.ElapsedMilliseconds))
+        Start-Sleep -Milliseconds ([Math]::Max(1, $IntervalMilliseconds - [int]$clock.ElapsedMilliseconds))
     }
 } catch {
     $failure = @{time=[DateTimeOffset]::Now.ToString('o'); status='CPU logging failed'; error=$_.Exception.ToString(); pid=$PID} | ConvertTo-Json -Compress

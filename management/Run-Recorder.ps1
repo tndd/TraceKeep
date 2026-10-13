@@ -8,6 +8,18 @@ $mutex = [Threading.Mutex]::new($false,'Global\PCDiagnostics-Coordinator-v1')
 $locked=$false
 $workers=@{}
 $utf8=[Text.UTF8Encoding]::new($false)
+$intervals=@{cpu=2000;board=2000;activity=2000}
+$configuration=Join-Path $DataRoot 'recorder-settings.json'
+if(Test-Path -LiteralPath $configuration){
+    $settings=Get-Content -LiteralPath $configuration -Raw|ConvertFrom-Json
+    foreach($name in @('cpu','board','activity')){
+        if($null -ne $settings.intervalMilliseconds.$name){
+            $value=[int]$settings.intervalMilliseconds.$name
+            if($value -lt 1000 -or $value -gt 5000){throw "Invalid sampling interval for $name (1000..5000 ms)"}
+            $intervals[$name]=$value
+        }
+    }
+}
 function Record-Controller($value) {
     $value.time=[DateTimeOffset]::Now.ToString('o')
     $path=Join-Path $logRoot ('coordinator-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
@@ -17,7 +29,8 @@ function Record-Controller($value) {
 }
 function Launch-Worker($w) {
     $args='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$w.script+'" -LogRoot "'+$logRoot+'"'
-    if($w.name -ne 'activity') {$args+=' -LibraryDirectory "'+$library+'"'}
+    if($w.name -in @('cpu','board')) {$args+=' -LibraryDirectory "'+$library+'"'}
+    if($w.name -ne 'evidence') {$args+=' -IntervalMilliseconds '+$intervals[$w.name]}
     $w.process=Start-Process -FilePath $shell -ArgumentList $args -WindowStyle Hidden -PassThru
     $null=$w.process.Handle
     $w.started=[DateTimeOffset]::Now
@@ -28,8 +41,8 @@ try {
     try {$locked=$mutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$locked=$true}
     if(-not $locked){exit 0}
     if(Test-Path (Join-Path $DataRoot 'STOP-ALL')){exit 0}
-    foreach($marker in @('STOP-CPU','STOP-BOARD','STOP')){$path=Join-Path $logRoot $marker;if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
-    foreach($entry in @(@('cpu','Start-AutomaticCpuLogging.ps1','cpu-auto-'),@('board','Start-MotherboardLogging.ps1','board-auto-'),@('activity','Start-ContinuousDiagnostics.ps1','activity-'))){
+    foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE')){$path=Join-Path $logRoot $marker;if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
+    foreach($entry in @(@('cpu','Start-AutomaticCpuLogging.ps1','cpu-auto-'),@('board','Start-MotherboardLogging.ps1','board-auto-'),@('activity','Start-ContinuousDiagnostics.ps1','activity-'),@('evidence','Start-EvidenceLogging.ps1','evidence-'))){
         $workers[$entry[0]]=@{name=$entry[0];script=(Join-Path $codeRoot ('collectors\'+$entry[1]));prefix=$entry[2];process=$null;started=[DateTimeOffset]::Now;restarts=@();retryAt=[DateTimeOffset]::Now;state='starting'}
         Launch-Worker $workers[$entry[0]]
     }
@@ -40,16 +53,22 @@ try {
             $age=if($file){($now.UtcDateTime-$file.LastWriteTimeUtc).TotalSeconds}else{$null}
             $elapsed=($now-$w.started).TotalSeconds
             $alive=$w.process -and -not $w.process.HasExited
-            $stalled=$alive -and $elapsed -gt 60 -and ($null -eq $age -or $age -gt 60)
+            $freshLimit=if($w.name -eq 'evidence'){30}else{[Math]::Max(10,$intervals[$w.name]/1000+5)}
+            $stallLimit=[Math]::Max(120,3*$freshLimit)
+            $stalled=$alive -and $elapsed -gt $stallLimit -and ($null -eq $age -or $age -gt $stallLimit)
             if($stalled){Record-Controller @{event='worker-stalled';worker=$w.name;pid=$w.process.Id;logAgeSeconds=$age};$w.process.Kill();$null=$w.process.WaitForExit(5000);$alive=-not $w.process.HasExited}
             if(-not $alive){
                 $w.restarts=@($w.restarts|Where-Object {($now-$_).TotalMinutes -lt 10})
                 if($w.state -ne 'waiting' -and $w.state -ne 'cooldown'){$w.state='waiting';$w.retryAt=$now.AddSeconds(10);Record-Controller @{event='worker-exited';worker=$w.name}}
                 if($w.restarts.Count -ge 3){$w.state='cooldown'}
                 elseif($now -ge $w.retryAt){$w.restarts+=,$now;if($w.process){$w.process.Dispose()};Launch-Worker $w}
-            } else {$w.state=if($null -ne $age -and $age -le 10){'recording'}else{'waiting-for-samples'}}
+            } else {$w.state=if($null -ne $age -and $age -le $freshLimit){'recording'}else{'waiting-for-samples'}}
+            $w.errorCount=0
+            if($w.name -eq 'evidence' -and $file){
+                try {$row=Get-Content -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
+            }
         }
-        $runtime=@{time=$now.ToString('o');pid=$PID;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;recentRestarts=$_.restarts.Count}})}
+        $runtime=@{time=$now.ToString('o');pid=$PID;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}
         $temp=Join-Path $DataRoot 'runtime.tmp'
         [IO.File]::WriteAllText($temp,($runtime|ConvertTo-Json -Depth 5),$utf8)
         $dest=Join-Path $DataRoot 'runtime.json'
@@ -58,7 +77,7 @@ try {
     }
 } finally {
     if($locked){
-        foreach($marker in @('STOP-CPU','STOP-BOARD','STOP')){[IO.File]::WriteAllText((Join-Path $logRoot $marker),'coordinator stop',$utf8)}
+        foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE')){[IO.File]::WriteAllText((Join-Path $logRoot $marker),'coordinator stop',$utf8)}
         foreach($w in $workers.Values){if($w.process){if(-not $w.process.HasExited -and -not $w.process.WaitForExit(5000)){$w.process.Kill();$null=$w.process.WaitForExit(5000)};$w.process.Dispose()}}
         Record-Controller @{event='coordinator-stopped'}
         $mutex.ReleaseMutex()

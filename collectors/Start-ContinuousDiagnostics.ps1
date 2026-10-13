@@ -1,4 +1,4 @@
-param([int]$MaxSamples = 0, [string]$LogRoot)
+param([int]$MaxSamples = 0, [string]$LogRoot, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Read-NvidiaDiagnostics.ps1')
 $root = $LogRoot
@@ -39,10 +39,7 @@ try {
     $session = [guid]::NewGuid().ToString()
     $gpuExe = Get-ChildItem -Path 'C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
     $os = Get-CimInstance Win32_OperatingSystem
-    Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=2; lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; logRoot=$root; note='No AC waveform or internal PSU protection measurements are available.'})
-    $lastEventTime = (Get-Date).AddMinutes(-5)
-    $lastEventId = 0L
-    $nextEvents = Get-Date
+    Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=($IntervalMilliseconds/1000); lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; logRoot=$root; note='No AC waveform or internal PSU protection measurements are available.'})
     $nextSizeCheck = (Get-Date).AddMinutes(1)
     $memory = $null
     $iteration = 0
@@ -69,22 +66,10 @@ try {
             } catch { $record.errors += $_.Exception.Message }
         }
         $record.sampleDurationMs = $timer.ElapsedMilliseconds
+        $record.monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp()
+        $record.monotonicFrequency=[Diagnostics.Stopwatch]::Frequency
+        $record.intervalMilliseconds=$IntervalMilliseconds
         Write-Record 'activity' $record
-        if ((Get-Date) -ge $nextEvents) {
-            try {
-                $events = @(Get-WinEvent -FilterHashtable @{LogName='System'; StartTime=$lastEventTime} -ErrorAction Stop | Where-Object { $_.RecordId -gt $lastEventId } | Sort-Object RecordId)
-                foreach ($event in $events) {
-                    if ($event.Level -le 3 -or $event.ProviderName -match 'Kernel-Power|Kernel-Boot|Kernel-Processor-Power|WHEA|MemoryDiagnostics|User32|EventLog|volmgr|stornvme|disk|Ntfs') {
-                        Write-Record 'events' ([ordered]@{time=$event.TimeCreated.ToString('o'); session=$session; recordId=$event.RecordId; provider=$event.ProviderName; id=$event.Id; level=$event.Level; xml=$event.ToXml()})
-                    }
-                    $lastEventId = [long]$event.RecordId
-                }
-                if ($events.Count -gt 0) { $lastEventTime = $events[-1].TimeCreated.AddSeconds(-1) }
-            } catch {
-                if ($_.FullyQualifiedErrorId -notlike 'NoMatchingEventsFound*') { Write-Record 'errors' @{time=[DateTimeOffset]::Now.ToString('o'); error=$_.Exception.Message} }
-            }
-            $nextEvents = (Get-Date).AddSeconds(15)
-        }
         if ((Get-Date) -ge $nextSizeCheck) {
             $total = (Get-ChildItem -LiteralPath $root -Filter '*.jsonl' | Measure-Object Length -Sum).Sum
             if ($total -ge 2GB -and -not $sizeWarningSent) {
@@ -95,7 +80,7 @@ try {
         }
         $iteration++
         if ($MaxSamples -gt 0 -and $iteration -ge $MaxSamples) { break }
-        $delay = [Math]::Max(1, 2000 - [int]$timer.ElapsedMilliseconds)
+        $delay = [Math]::Max(1, $IntervalMilliseconds - [int]$timer.ElapsedMilliseconds)
         Start-Sleep -Milliseconds $delay
     }
     Write-Record 'sessions' @{time=[DateTimeOffset]::Now.ToString('o'); session=$session; status='Stopped normally'; samples=$iteration}

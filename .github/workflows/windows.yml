@@ -21,6 +21,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-CollectorCoordination.ps1
       - name: Unified recorder with simulated workers
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1
+      - name: Evidence recovery and partial-write handling
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Evidence.ps1
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |
@@ -42,6 +44,9 @@ jobs:
           Copy-Item src-tauri/target/release/pcdiag.exe,src-tauri/target/release/pc-diagnostics.exe,src-tauri/Cargo.lock -Destination package
           Copy-Item management,collectors -Destination package -Recurse
           Copy-Item README.md -Destination package
+          $files = @('pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+          $manifest = @{files=@($files | ForEach-Object {@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path 'package' $_) -Algorithm SHA256).Hash}})}
+          [IO.File]::WriteAllText((Join-Path $PWD 'package/update-manifest.json'),($manifest | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
           & package/pcdiag.exe help
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

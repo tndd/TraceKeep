@@ -1,4 +1,4 @@
-param([int]$MaxSamples = 0, [string]$LogRoot, [string]$LibraryDirectory)
+param([int]$MaxSamples = 0, [string]$LogRoot, [string]$LibraryDirectory, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
 if (-not $LogRoot) { $LogRoot = Join-Path $PSScriptRoot 'sensor-logs' }
 if (-not $LibraryDirectory) { $LibraryDirectory = Join-Path $PSScriptRoot 'library' }
@@ -60,12 +60,15 @@ try {
             $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
             $day = $today
         }
+        $record.monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp()
+        $record.monotonicFrequency=[Diagnostics.Stopwatch]::Frequency
+        $record.intervalMilliseconds=$IntervalMilliseconds
         $writer.WriteLine(($record | ConvertTo-Json -Depth 6 -Compress))
         $writer.Flush()
         $writer.BaseStream.Flush($true)
         $sequence++
         if ($MaxSamples -gt 0 -and $sequence -ge $MaxSamples) { break }
-        Start-Sleep -Milliseconds ([Math]::Max(1, 2000 - [int]$timer.ElapsedMilliseconds))
+        Start-Sleep -Milliseconds ([Math]::Max(1, $IntervalMilliseconds - [int]$timer.ElapsedMilliseconds))
     }
 } catch {
     [IO.File]::WriteAllText((Join-Path $LogRoot 'board-auto-last-error.json'), (@{time=[DateTimeOffset]::Now.ToString('o'); error=$_.Exception.ToString(); session=$session} | ConvertTo-Json -Compress), [Text.UTF8Encoding]::new($false))

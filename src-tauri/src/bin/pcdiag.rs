@@ -1,16 +1,32 @@
 use diagnostics_core::{Monitor,Sources,export_snapshot,machine_dir};
 use serde_json::{json,Value};
-use std::{path::PathBuf,process::{Command,ExitCode},time::Duration};
+use std::{path::PathBuf,process::{Command,ExitCode},time::Duration,io::{Read,Seek,SeekFrom}};
 
 fn management(action:&str,extra:&[String])->Result<i32,String>{
     let exe=std::env::current_exe().map_err(|e|e.to_string())?;
-    let script=exe.parent().unwrap().join("management/Manage-Recorder.ps1");
+    let script=exe.parent().unwrap().join(if action=="upgrade"{"management/Update-Recorder.ps1"}else{"management/Manage-Recorder.ps1"});
     if !script.is_file(){return Err("Management package missing next to pcdiag.exe (management/Manage-Recorder.ps1). Extract the complete bundle.".into());}
     let shell=PathBuf::from(std::env::var_os("WINDIR").ok_or("WINDIR is unavailable")?).join("System32/WindowsPowerShell/v1.0/powershell.exe");
-    let status=Command::new(shell).args(["-NoProfile","-ExecutionPolicy","Bypass","-File"]).arg(script).args(["-Action",action]).args(extra).status().map_err(|e|e.to_string())?;
+    let mut cmd=Command::new(shell);cmd.args(["-NoProfile","-ExecutionPolicy","Bypass","-File"]).arg(script);
+    if action!="upgrade"{cmd.args(["-Action",action]);}
+    let status=cmd.args(extra).status().map_err(|e|e.to_string())?;
     Ok(status.code().unwrap_or(1))
 }
 fn healthy(v:&Value)->bool{["cpu","board","activity"].iter().all(|k|v["streams"][k]["state"]=="recording")}
+fn evidence_healthy(v:&Value)->bool{
+    v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|workers|workers.iter().any(|w|w["name"]=="evidence" && w["state"]=="recording" && w["errorCount"].as_u64()==Some(0)))
+}
+fn read_json(path:PathBuf)->Value{
+    match std::fs::read(&path){Ok(bytes)=>serde_json::from_slice(&bytes).unwrap_or_else(|e|json!({"error":e.to_string(),"path":path})),Err(e)=>json!({"error":e.to_string(),"path":path})}
+}
+fn latest_evidence(prefix:&str)->Value{
+    let root=machine_dir().join("logs");
+    let mut paths=match std::fs::read_dir(root){Ok(entries)=>entries.filter_map(Result::ok).map(|e|e.path()).filter(|p|p.file_name().and_then(|s|s.to_str()).is_some_and(|s|s.starts_with(prefix)&&s.ends_with(".jsonl"))).collect::<Vec<_>>(),Err(e)=>return json!({"error":e.to_string()})};
+    paths.sort();
+    let Some(path)=paths.last() else{return json!({"error":"No evidence log yet"})};
+    let result=(||->Result<Value,String>{let mut file=std::fs::File::open(path).map_err(|e|e.to_string())?;let length=file.metadata().map_err(|e|e.to_string())?.len();let start=length.saturating_sub(256*1024);file.seek(SeekFrom::Start(start)).map_err(|e|e.to_string())?;let mut bytes=Vec::new();file.take(256*1024).read_to_end(&mut bytes).map_err(|e|e.to_string())?;let text=String::from_utf8_lossy(&bytes);text.lines().rev().find_map(|line|serde_json::from_str::<Value>(line).ok()).ok_or("No complete evidence row".into())})();
+    result.unwrap_or_else(|e|json!({"error":e,"path":path}))
+}
 fn display(v:&Value){
     println!("PC Diagnostics  {}",v["time"].as_str().unwrap_or(""));
     for k in ["cpu","board","activity"]{let s=&v["streams"][k];println!("{k:10} {:12} age={}s  {}",s["state"].as_str().unwrap_or("unknown"),s["age"],s["path"].as_str().unwrap_or("no log"));}
@@ -22,9 +38,16 @@ fn run()->Result<i32,String>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     let command=args.first().map(String::as_str).unwrap_or("help");
     if ["help","--help","-h"].contains(&command){
-        println!("pcdiag status [--json]\npcdiag watch [--json]\npcdiag logs\npcdiag export\npcdiag doctor [--json]\npcdiag install --legacy-activity-root PATH\npcdiag start | stop | restart | rollback\n\nThe GUI is optional. Control/install commands require an Administrator terminal.\nExit codes: 0 success, 1 command failure, 2 stale/missing/error streams.");return Ok(0);
+        println!("pcdiag status [--json]\npcdiag watch [--json]\npcdiag logs\npcdiag export\npcdiag doctor [--json]\npcdiag evidence\npcdiag incidents\npcdiag install --legacy-activity-root PATH\npcdiag upgrade\npcdiag start | stop | restart | rollback\n\nThe GUI is optional. Control/install/upgrade commands require an Administrator terminal.\nExit codes: 0 success, 1 command failure, 2 stale/missing/error streams.");return Ok(0);
     }
-    if ["start","stop","restart","rollback"].contains(&command){if args.len()!=1{return Err("Unexpected argument".into());}return management(command,&[]);}
+    if ["start","stop","restart","rollback","upgrade"].contains(&command){if args.len()!=1{return Err("Unexpected argument".into());}return management(command,&[]);}
+    if ["evidence","incidents"].contains(&command){
+        if args.len()!=1{return Err("Unexpected argument".into());}
+        let value=if command=="evidence"{json!({"evidence":latest_evidence("evidence-"),"storage":latest_evidence("storage-"),"crashConfiguration":read_json(machine_dir().join("crash-configuration.json"))})}else{
+            let root=machine_dir().join("incidents");let mut paths=std::fs::read_dir(&root).map_err(|e|format!("{}: {e}",root.display()))?.filter_map(Result::ok).map(|e|e.path().join("manifest.json")).filter(|p|p.is_file()).collect::<Vec<_>>();paths.sort();json!(paths.iter().map(|p|json!({"path":p,"manifest":read_json(p.clone())})).collect::<Vec<_>>())
+        };
+        println!("{}",serde_json::to_string_pretty(&value).unwrap());return Ok(0);
+    }
     if command=="install"{
         if args.len()!=3 || args[1]!="--legacy-activity-root" {return Err("Use: pcdiag install --legacy-activity-root PATH".into());}
         return management("install",&["-LegacyActivityRoot".into(),args[2].clone()]);
@@ -43,7 +66,7 @@ fn run()->Result<i32,String>{
             v["coordinator"]=json!({"configured":machine_dir().join("sources.json").exists(),"heartbeatAgeSeconds":age,"runtime":runtime});
         }
         if command=="export"{println!("{}",export_snapshot(&v)?.display());return Ok(0);}
-        let ok=healthy(&v) && (command!="doctor" || (v["coordinator"]["configured"]==true && v["coordinator"]["heartbeatAgeSeconds"].as_i64().is_some_and(|age|(0..=10).contains(&age))));
+        let ok=healthy(&v) && (command!="doctor" || (evidence_healthy(&v) && v["coordinator"]["configured"]==true && v["coordinator"]["heartbeatAgeSeconds"].as_i64().is_some_and(|age|(0..=10).contains(&age))));
         if args.iter().any(|a|a=="--json"){println!("{}",serde_json::to_string(&v).unwrap());}else{display(&v);if command=="doctor"{println!("Unified configuration: {}\nCoordinator heartbeat age: {}s\nWorkers: {}",v["coordinator"]["configured"],v["coordinator"]["heartbeatAgeSeconds"],v["coordinator"]["runtime"]["workers"]);}}
         if command!="watch"{return Ok(if ok{0}else{2});}
         std::thread::sleep(Duration::from_secs(2));
@@ -51,3 +74,4 @@ fn run()->Result<i32,String>{
 }
 fn main()->ExitCode{match run(){Ok(code)=>ExitCode::from(code as u8),Err(e)=>{eprintln!("pcdiag: {e}");ExitCode::FAILURE}}}
 #[cfg(test)]mod tests{use super::*;#[test]fn status_requires_all_streams(){let mut s=json!({"streams":{"cpu":{"state":"recording"},"board":{"state":"recording"},"activity":{"state":"stale"}}});assert!(!healthy(&s));s["streams"]["activity"]["state"]=json!("recording");assert!(healthy(&s));assert!(!healthy(&json!({})));}}
+#[cfg(test)]mod evidence_tests{use super::*;#[test]fn missing_or_failing_evidence_is_not_healthy(){assert!(!evidence_healthy(&json!({})));let mut v=json!({"coordinator":{"runtime":{"workers":[{"name":"evidence","state":"recording","errorCount":0}]}}});assert!(evidence_healthy(&v));v["coordinator"]["runtime"]["workers"][0]["errorCount"]=json!(1);assert!(!evidence_healthy(&v));}}

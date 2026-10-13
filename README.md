@@ -75,6 +75,18 @@ The `collectors/` directory contains the PowerShell source used by these indepen
 
 The auxiliary collector also acquires the legacy per-user mutex, so it exits when the installed first-generation recorder already owns it. The existing installation is not overwritten by opening or building the GUI.
 
+## Evidence recorder
+
+The isolated evidence worker runs every 15 seconds. It stores the full XML of selected System/Application events and enabled WHEA/storage operational channels. Durable per-channel record-ID checkpoints survive recorder restarts and long downtime; first-time recovery is bounded to seven days. Each batch is capped at 2,000 selected events and drains remaining backlog on subsequent passes. A failed append never advances its checkpoint. An interrupted batch can replay records: deduplicate by channel, record ID and event time. Record-ID rollback or loss/replacement of the saved event-time anchor triggers bounded recovery and an explicit gap notice. Windows events already overwritten before recovery cannot be reconstructed.
+
+Every five minutes it captures Windows-exposed storage reliability counters, crash-dump settings, page-file allocation, local-volume free space and dump metadata. Unsupported fields are null, and access failures are retained explicitly. This does not claim to expose all raw NVMe SMART fields. Machine firmware/driver inventory is captured at worker startup without serial numbers.
+
+After boot events settle for 90 seconds, one snapshot per OS boot is saved under `%ProgramData%\PCDiagnostics\incidents\boot-...`. It includes recent raw boot/failure events, crash configuration and bounded tails from the last two dates of each stream (8 MiB per file). The manifest records truncation, failures and SHA-256 hashes. Original logs remain intact; dumps are indexed, not copied. A snapshot without event 41/6008 is unclassified, not proof of clean shutdown. Late events remain in the continuous event archive; the snapshot is immutable. Sleep/resume does not create a new OS-boot snapshot.
+
+Sensor defaults remain 2,000 ms. An administrator can set per-stream `cpu`, `board` and `activity` values from 1,000 to 5,000 ms in `recorder-settings.json` under the data root using an `intervalMilliseconds` object, then restart the recorder. Event and storage intervals are independent. Poll duration is elapsed time, not CPU utilization; shorter intervals cannot capture PSU protection waveforms. Current verbose sensor JSON can consume about 0.8 GiB/day on the initial machine. No automatic deletion or compression is performed.
+
+To upgrade an active unified installation, extract the complete new package and run `management/Update-Recorder.ps1` once in Administrator PowerShell. It verifies the package's script checksums and syntax, backs up the installed scripts, stops recording briefly, and requires fresh sensor samples and successful System-event checkpointing. Failure restores the previous scripts and recording. It adds no drivers, changes no hardware controls and does not reboot. The checksum manifest detects package corruption; it is not a publisher signature.
+
 ## Diagnostic limits
 
 * Freshness is a property of the saved logs, not a guarantee that hardware is healthy.

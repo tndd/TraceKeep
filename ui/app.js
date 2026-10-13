@@ -4,7 +4,7 @@ let data = null;
 const names = {
   cpu: "CPUセンサー",
   board: "基板センサー",
-  activity: "GPU・負荷・イベント",
+  activity: "GPU・負荷",
 };
 const labels = {
   recording: "記録中",
@@ -12,6 +12,7 @@ const labels = {
   missing: "ログなし",
   error: "読み取りエラー",
   clock: "時刻を確認",
+  disabled: "収集対象外",
 };
 function el(tag, text, cls) {
   const e = document.createElement(tag);
@@ -294,11 +295,15 @@ function chart(id, series, min, max) {
 function render() {
   if (!data) return;
   const s = data.streams;
-  const bad = Object.keys(names).filter((k) => s[k].state !== "recording");
+  const bad = Object.keys(names).filter((k) => !["recording","disabled"].includes(s[k].state));
   $("banner").classList.toggle("bad", bad.length > 0);
   $("overall").textContent = bad.length
     ? bad.map((k) => names[k]).join("・") + "の記録を確認してください"
     : "3系統のログが更新されています";
+  if (data.recorder) {
+    $("overall").textContent = data.recorder.label;
+    $("banner").classList.toggle("bad", !["recording","stopped"].includes(data.recorder.state));
+  }
   if (data.preview) $("overall").textContent = "開発プレビュー / 模擬データ";
   $("updated").textContent = "取得 " + clock(data.time) + " JST";
   $("streams").replaceChildren();

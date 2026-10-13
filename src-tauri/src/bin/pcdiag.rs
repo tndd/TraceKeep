@@ -40,7 +40,22 @@ fn display(v:&Value){
 fn run()->Result<i32,String>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     let command=args.first().map(String::as_str).unwrap_or("help");
+    #[cfg(windows)]
+    if command=="tray" {
+        use diagnostics_core::desktop;
+        match args.get(1).map(String::as_str) {
+            None if args.len()==1=>desktop::launch("mini")?,
+            Some("--mini"|"--full"|"--tray") if args.len()==2=>desktop::launch(args[1].trim_start_matches("--"))?,
+            Some("startup") if args.len()==3=>match args[2].as_str(){
+                "status"=>println!("{}",json!({"startup":desktop::startup_status()?})),
+                "on"|"off"=>desktop::set_startup(args[2]=="on",&desktop::viewer_path()?)?,
+                _=>return Err("Use: pcdiag tray startup on|off|status".into())
+            },
+            _=>return Err("Use: pcdiag tray [--mini|--full|--tray] | startup on|off|status".into())
+        }return Ok(0);
+    }
     if ["help","--help","-h"].contains(&command){
+        println!("pcdiag tray [--mini|--full|--tray]\npcdiag tray startup on|off|status\nWindow X keeps recording in the tray. Tray Exit stops recording (UAC) before exiting.");
         println!("pcdiag config show\npcdiag config enable|disable MODULE\npcdiag config interval MODULE SECONDS\npcdiag coverage\nConfiguration changes restart a running recorder; existing logs are retained.");
         println!("pcdiag status [--json]\npcdiag watch [--json]\npcdiag logs\npcdiag export\npcdiag doctor [--json]\npcdiag evidence\npcdiag incidents\npcdiag install --legacy-activity-root PATH\npcdiag upgrade\npcdiag start | stop | restart | rollback\n\nThe GUI is optional. Control/install/upgrade commands require an Administrator terminal.\nExit codes: 0 success, 1 command failure, 2 stale/missing/error streams.");return Ok(0);
     }

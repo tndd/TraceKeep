@@ -6,6 +6,10 @@ use std::{collections::{BTreeMap, VecDeque}, fs::{self, File}, io::{Read, Seek, 
 const MAX_READ: u64 = 8 * 1024 * 1024;
 const HISTORY: usize = 450;
 
+pub mod recorder_status;
+#[cfg(windows)]
+pub mod desktop;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sources { pub sensor_root: PathBuf, pub activity_root: PathBuf }
@@ -119,7 +123,15 @@ impl Monitor {
         for reader in self.readers.values_mut() { reader.update(); }
         let streams: BTreeMap<_,_> = self.readers.iter().map(|(key,r)|(key,r.view(key,now.timestamp_millis()))).collect();
         let events:Vec<Value> = self.readers["events"].rows.iter().rev().take(20).map(|r|json!({"time":r["time"],"provider":r["provider"],"id":r["id"],"level":r["level"]})).collect();
-        json!({"app":"PC Diagnostics","version":2,"time":now.to_rfc3339(),"streams":streams,"events":events,"sources":self.sources})
+        let mut snapshot=json!({"app":"PC Diagnostics","version":2,"time":now.to_rfc3339(),"streams":streams,"events":events,"sources":self.sources});
+        snapshot["coordinator"]=recorder_status::read_coordinator();
+        snapshot["recorder"]=recorder_status::summary(&snapshot["coordinator"]);
+        if let Some(workers)=snapshot["coordinator"]["runtime"]["workers"].as_array().cloned() {
+            for worker in workers { if worker["enabled"]==false && worker["state"]=="disabled" {
+                if let Some(name)=worker["name"].as_str() { if let Some(stream)=snapshot["streams"].get_mut(name) {stream["state"]=json!("disabled");} }
+            } }
+        }
+        snapshot
     }
 }
 

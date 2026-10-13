@@ -12,7 +12,7 @@ The extended recorder adds an isolated worker for detailed performance, processe
 .\pcdiag.exe config interval performance 30
 ```
 
-Recording needs no GUI, browser, Python server or logged-in user after migration. Closing either `pcdiag watch` or the optional GUI does not stop the boot task. Only an explicit administrative stop changes recording.
+Recording needs no GUI, browser, Python server or logged-in user after migration. Window X returns to the optional tray and keeps recording; the tray's explicit **stop recording and exit** stops the boot task through the CUI before removing the icon. Closing `pcdiag watch` or a GUI crash does not stop recording. See [tray setup and lifecycle](docs/tray.md).
 
 ## Unified CUI
 

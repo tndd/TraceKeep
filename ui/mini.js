@@ -3,9 +3,6 @@ const workerNames={cpu:'CPU',board:'基板',activity:'GPU',evidence:'イベン�
 const states={recording:'記録中',disabled:'収集対象外',stopped:'停止中',stale:'更新停止',missing:'未取得',error:'エラー',unknown:'未確認'};
 function render(data,control){
   const m=window.MiniModel(data,control);
-  $('status-title').textContent=m.recorder.label;
-  $('light').className='light '+m.recorder.state;
-  $('status-title').title='記録プロセスの状態です。ハードウェアの故障判定ではありません。';
   for(const name of ['cpu','gpu']){
     const r=m[name],g=TemperatureGauge.reading(r.value,r.fresh,name),node=$(name+'-gauge');
     $(name).textContent=g.available?Math.round(g.value):'—';$(name).classList.toggle('old',!g.available);

@@ -128,8 +128,13 @@ Protect-Directory $dataRoot
 Protect-Directory $logRoot
 $backup=Join-Path $dataRoot ('migration-backup-'+(Get-Date -Format yyyyMMdd-HHmmss));Protect-Directory $backup
 foreach($dir in @('management','collectors')){Copy-Item -LiteralPath (Join-Path $package $dir) -Destination $codeRoot -Recurse -Force}
-foreach($file in @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','pc-diagnostics.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
+foreach($file in @('pcdiag.exe','pc-diagnostics.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
 Copy-Item -LiteralPath (Join-Path $oldRoot 'library') -Destination $codeRoot -Recurse -Force
+. (Join-Path $codeRoot 'collectors\Evidence-Core.ps1')
+. (Join-Path $codeRoot 'collectors\Collection-Settings.ps1')
+. (Join-Path $codeRoot 'management\CrashDump-Policy.ps1')
+Protect-DiagnosticArchive (Join-Path $dataRoot 'archive')
+Save-EvidenceJson (Join-Path $dataRoot 'collection-settings.json') (Get-CollectionDefaults)
 $state=[ordered]@{phase='prepared';time=[DateTimeOffset]::Now.ToString('o');tasks=@();activityScript=$activityScript;activityUserSid=$activitySid;activityWasRunning=($activityProcesses.Count -gt 0);legacyActivityRoot=$LegacyActivityRoot;startupPath=$startupPath;startupBackup=$null;logRoot=$logRoot}
 foreach($t in $legacyTasks){$xml=Join-Path $backup ($t.TaskName+'.xml');[IO.File]::WriteAllText($xml,(Export-ScheduledTask -TaskName $t.TaskName),$utf8);$state.tasks+=@{name=$t.TaskName;running=($t.State -eq 'Running');xml=$xml}}
 if(Test-Path -LiteralPath $startupPath){$state.startupBackup=Join-Path $backup 'PC Diagnostics Logger.lnk';Copy-Item -LiteralPath $startupPath -Destination $state.startupBackup}
@@ -156,6 +161,7 @@ try {
     $settings=New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
     Register-ScheduledTask -TaskName $taskName -Action $taskAction -Trigger $trigger -Principal $owner -Settings $settings -Description 'Unified read-only CPU, motherboard, GPU and Windows event recording. Independent workers, shared logs, bounded restart watchdog.'|Out-Null
     $since=[DateTimeOffset]::Now;Start-Unified;Verify-Fresh $since
+    $dumpPolicy=Enable-DiagnosticDumps $dataRoot
     $state.phase='active';$state.verifiedAt=[DateTimeOffset]::Now.ToString('o');Write-Json $statePath $state
     Write-Json (Join-Path $dataRoot 'installation.json') @{codeRoot=$codeRoot;dataRoot=$dataRoot;task=$taskName;verifiedAt=$state.verifiedAt;bootRestartTested=$false}
     [pscustomobject]@{status='Unified recording verified';command=(Join-Path $codeRoot 'pcdiag.exe');logs=$logRoot;task=$taskName;legacyTasks='disabled, retained for rollback';history='copied, originals retained';bootRestartTested=$false}|ConvertTo-Json

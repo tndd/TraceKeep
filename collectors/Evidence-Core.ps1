@@ -31,8 +31,8 @@ function Get-EvidenceXPath($channel,$cursor,[long]$latestId,[DateTimeOffset]$now
     else {$position="TimeCreated[@SystemTime >= '"+$now.UtcDateTime.AddDays(-7).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']"}
     return '*[System['+$selection+' and ('+$position+') and EventRecordID <= '+$latestId+']]'
 }
-function Read-EvidenceEvents($channel,$xpath,[int]$limit=2000) {
-    try {return @(Get-WinEvent -LogName $channel -FilterXPath $xpath -Oldest -MaxEvents $limit -ErrorAction Stop)}catch{if($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*'){return @()};throw}
+function Read-EvidenceEvents($channel,$xpath,[int]$limit=2000,[switch]$Newest) {
+    try {return @(Get-WinEvent -LogName $channel -FilterXPath $xpath -Oldest:(!$Newest) -MaxEvents $limit -ErrorAction Stop)}catch{if($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*'){return @()};throw}
 }
 function Sync-EvidenceChannel($logRoot,$stateRoot,$channel) {
     $cursor=Get-EvidenceCursor $stateRoot $channel
@@ -110,14 +110,28 @@ function Get-StorageEvidence {
     }catch{$errors+=$_.Exception.Message}
     return @{time=[DateTimeOffset]::Now.ToString('o');disks=$items;errors=$errors;note='Windows-exposed counters only. Null/unsupported is not zero or healthy; raw NVMe SMART/unsafe-shutdown counters are not guaranteed.'}
 }
+function Get-BootEvidenceXPath($bootTime) {
+    return "*[System[(EventID=41 or EventID=6008 or EventID=1001 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger']) and TimeCreated[@SystemTime >= '"+([DateTimeOffset]$bootTime).UtcDateTime.AddDays(-3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']]]"
+}
 function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     $key=([DateTimeOffset]$bootTime).UtcDateTime.ToString('yyyyMMddTHHmmssZ')
     $parent=Join-Path $dataRoot 'incidents';[void][IO.Directory]::CreateDirectory($parent)
     $dest=Join-Path $parent ('boot-'+$key)
-    if(Test-Path -LiteralPath (Join-Path $dest 'manifest.json')){return $dest}
+    $manifestPath=Join-Path $dest 'manifest.json'
+    if(Test-Path -LiteralPath $manifestPath){
+        $existing=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+        if(@($existing.errors).Count -gt 0 -and -not(Test-Path -LiteralPath (Join-Path $dest 'event-recovery.json'))){
+            # Preserve the original snapshot and failure manifest. Add a recovery
+            # supplement without replacing any original sensor or event files.
+            $recovered=@(Read-EvidenceEvents 'System' (Get-BootEvidenceXPath $bootTime) 5000 -Newest)
+            Save-EvidenceJson (Join-Path $dest 'boot-events-recovered.json') @($recovered|ForEach-Object {@{time=$_.TimeCreated.ToString('o');channel='System';recordId=$_.RecordId;provider=$_.ProviderName;id=$_.Id;xml=$_.ToXml()}})
+            Save-EvidenceJson (Join-Path $dest 'event-recovery.json') @{time=[DateTimeOffset]::Now.ToString('o');eventCount=$recovered.Count;status='boot-event-query-recovered';originalErrors=$existing.errors;note='Original snapshot retained; this supplement repairs only boot-event extraction.'}
+        }
+        return $dest
+    }
     [void][IO.Directory]::CreateDirectory($dest)
     $errors=@();$copied=@();$events=@()
-    try {$events=@(Read-EvidenceEvents 'System' ("*[System[(EventID=41 or EventID=6008 or EventID=1001 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger']) and TimeCreated[@SystemTime >= '"+([DateTimeOffset]$bootTime).UtcDateTime.AddDays(-3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']]") 5000)}catch{$errors+=$_.Exception.Message}
+    try {$events=@(Read-EvidenceEvents 'System' (Get-BootEvidenceXPath $bootTime) 5000 -Newest)}catch{$errors+=$_.Exception.Message}
     $abnormal=@($events|Where-Object {$_.Id -in @(41,6008) -and ([DateTimeOffset]$_.TimeCreated) -ge ([DateTimeOffset]$bootTime).AddMinutes(-2)})
     Save-EvidenceJson (Join-Path $dest 'crash-configuration.json') $crash
     foreach($name in @('machine-inventory.json','recorder-settings.json')){if(Test-Path -LiteralPath (Join-Path $dataRoot $name)){Copy-Item -LiteralPath (Join-Path $dataRoot $name) -Destination (Join-Path $dest $name) -Force}}

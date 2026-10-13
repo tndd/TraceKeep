@@ -42,6 +42,7 @@ Assert (((Get-Content (Join-Path $root 'empty.json') -Raw) -replace '\s','') -eq
 Save-EvidenceJson (Join-Path $root 'null.json') $null
 Assert ((Get-Content (Join-Path $root 'null.json') -Raw).Trim() -eq 'null') 'Missing value must serialize explicitly'
 $boot=[DateTimeOffset]::Now.AddMinutes(-5)
+$null=[Xml.XPath.XPathExpression]::Compile((Get-BootEvidenceXPath $boot))
 $script:event.Id=41;$script:event.TimeCreated=$boot.LocalDateTime.AddSeconds(5)
 $bundle=New-IncidentBundle $root $root $boot @{settings=@{};os=@{}}
 $manifest=Get-Content (Join-Path $bundle 'manifest.json') -Raw|ConvertFrom-Json
@@ -49,4 +50,10 @@ Assert ($manifest.classification -eq 'abnormal-boot-evidence' -and $manifest.abn
 $hash=(Get-FileHash (Join-Path $bundle 'manifest.json')).Hash
 $null=New-IncidentBundle $root $root $boot @{settings=@{changed=$true}}
 Assert ((Get-FileHash (Join-Path $bundle 'manifest.json')).Hash -eq $hash) 'Repeated worker starts must preserve the boot bundle'
+$manifest.errors=@('synthetic query failure')
+Save-EvidenceJson (Join-Path $bundle 'manifest.json') $manifest
+$failedHash=(Get-FileHash (Join-Path $bundle 'manifest.json')).Hash
+$null=New-IncidentBundle $root $root $boot @{settings=@{}}
+$recovery=Get-Content (Join-Path $bundle 'event-recovery.json') -Raw|ConvertFrom-Json
+Assert ($recovery.eventCount -eq 1 -and (Get-FileHash (Join-Path $bundle 'manifest.json')).Hash -eq $failedHash) 'Recovery must add missing events without replacing original evidence'
 Write-Output 'PASS: durable checkpoint ordering, time-independent recovery, log reset, corrupt-state fallback, raw XML, bounded tails and partial-write handling.'

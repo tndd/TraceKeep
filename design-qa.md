@@ -74,3 +74,13 @@ Read-only verification of a two-hour saved-log window returned all expected CPU/
 No actionable P0/P1/P2 visual findings remain within the reviewed desktop layouts. P3: verify additional physical display scaling if requested; extremely narrow chart cells omit their visible counts but retain accessible labels.
 
 final result: passed
+
+## Summary visual refinements (2026-10-14)
+
+Source revision: d637f1d. CPU summary now compares the first and second hours of the selected interval in blue and yellow, including marginal distributions and explicit time legends. Event cells retain severity hue and use five fixed count bands for intensity; the same count has the same intensity across providers and filters. Removed permanent cell outlines and overlaid count labels; hover/accessibility and selection retain exact counts.
+
+Board voltage now shows time-by-value occupancy, normalized by the available samples in each five-minute column, plus an all-period marginal distribution. Discrete observed values remain discrete; more than 12 unique levels are explicitly binned without smoothing. Empty columns are distinguished from zero occupancy. Hover/keyboard selection exposes the numerator and denominator.
+
+Validation: seven frontend tests passed, covering fixed event thresholds, empty/discrete voltage data and conservation under binning. Real-record browser review verified both CPU colors, differing intensity for two vs four events, keyboard event drilldown and voltage-cell details. Wide desktop and narrow layouts were inspected; no new console errors. Screenshot saved privately outside the repository. The browser viewport override was reset. Collectors are unchanged.
+
+final result: passed

@@ -26,4 +26,9 @@ async function refresh(){try{
   render(data,control);
 }catch(e){render({recorder:{state:'unknown',label:'取得できません'}},{message:String(e)});}finally{setTimeout(refresh,2000);}}
 $('full').onclick=async()=>{try{if(invoke)await invoke('open_view',{view:'full'});else location.href='index.html';}catch(e){$('notice').textContent=String(e);}};
+$('close').onclick=async()=>{try{if(invoke)await window.__TAURI__.window.getCurrentWindow().close();else $('notice').textContent='アプリではトレイに戻ります。記録は継続します。';}catch(e){$('notice').textContent=String(e);}};
+document.querySelector('header').addEventListener('mousedown',async e=>{
+  if(e.button!==0||e.target.closest('button')||!invoke)return;
+  try{await window.__TAURI__.window.getCurrentWindow().startDragging();}catch(e){$('notice').textContent=String(e);}
+});
 refresh();

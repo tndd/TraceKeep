@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mini-window-controls",
+  "description": "Move the frameless mini monitor and close it back to the tray",
+  "windows": ["mini"],
+  "permissions": ["core:window:allow-start-dragging", "core:window:allow-close"]
+}

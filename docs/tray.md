@@ -32,3 +32,5 @@ The launcher prefers the per-user installed viewer, then the adjacent packaged v
 The native tray reads the coordinator heartbeat every two seconds; no WebView or sensor scan is needed while all windows are closed. Green means the expected enabled recording workers report fresh successful recording; it does not certify healthy hardware. Stopped is grey, stale/missing/failed is amber. The mini monitor labels old temperatures as last values and honours explicit module opt-outs. Individual unavailable providers remain available through `pcdiag coverage`.
 
 The detailed monitor uses the existing cockpit; this stage adds its entry point, not a new full dashboard. A real Windows login/startup test remains separate from registration verification. UAC start/stop must not be tested on a live diagnostic installation simply to test the GUI; automated lifecycle tests use an isolated synthetic environment.
+
+The mini monitor has no native title bar. Drag its TraceKeep header to move it; its small × button closes the window back to the tray through the same close handler. Recording continues. The full monitor retains its standard window controls.

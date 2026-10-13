@@ -57,6 +57,7 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     let mut builder=tauri::WebviewWindowBuilder::new(app,label,tauri::WebviewUrl::App(url.into()))
         .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{280.}else{720.},if view=="mini"{228.}else{600.});
     if view=="mini" {
+        builder=builder.decorations(false);
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();
             builder=builder.position((pos.x as f64+size.width as f64-width*scale-20.*scale)/scale,(pos.y as f64+size.height as f64-height*scale-60.*scale).max(pos.y as f64)/scale);}
     }
@@ -99,7 +100,7 @@ fn main(){
             let stop=MenuItem::with_id(app,"stop","記録を停止…",true,None::<&str>)?;
             let startup=CheckMenuItem::with_id(app,"startup","ログオン時にトレイを表示",true,desktop::startup_status().ok().flatten().is_some(),None::<&str>)?;
             let menu=Menu::with_items(app,&[&mini,&full,&start,&stop,&startup,&quit])?;
-            TrayIconBuilder::with_id("diagnostics").icon(tray_icon(&tray_temperature::Display{text:"—".into(),tooltip:String::new(),color:[255,191,102]})).tooltip("TraceKeep · 記録を確認中")
+            TrayIconBuilder::with_id("diagnostics").icon(tray_icon(&tray_temperature::Display{text:"—".into(),tooltip:String::new(),color:[110,128,147]})).tooltip("TraceKeep · 記録を確認中")
                 .menu(&menu).show_menu_on_left_click(false)
                 .on_menu_event(move|app,event|match event.id.as_ref(){
                     "mini"|"full"=>request_view(app,event.id.as_ref()),

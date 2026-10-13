@@ -25,7 +25,7 @@ function Get-EvidenceCursor($stateRoot,$channel) {
     return $null
 }
 function Get-EvidenceXPath($channel,$cursor,[long]$latestId,[DateTimeOffset]$now) {
-    $selection=if($channel -eq 'System'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Kernel-Processor-Power'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='EventLog'] or Provider[@Name='User32'] or Provider[@Name='volmgr'] or Provider[@Name='disk'] or Provider[@Name='stornvme'] or Provider[@Name='Ntfs'])"}elseif($channel -eq 'Application'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Windows Error Reporting'])"}else{'(Level=1 or Level=2 or Level=3)'}
+    $selection=if($channel -eq 'System'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Microsoft-Windows-Kernel-Power'] or Provider[@Name='Microsoft-Windows-Kernel-Boot'] or Provider[@Name='Microsoft-Windows-Kernel-Processor-Power'] or Provider[@Name='Microsoft-Windows-WHEA-Logger'] or Provider[@Name='EventLog'] or Provider[@Name='User32'] or Provider[@Name='volmgr'] or Provider[@Name='disk'] or Provider[@Name='stornvme'] or Provider[@Name='Ntfs'])"}elseif($channel -eq 'Application'){"(Level=1 or Level=2 or Level=3 or Provider[@Name='Windows Error Reporting'])"}elseif($channel -like '*WHEA*'){'(EventRecordID >= 0)'}else{'(Level=1 or Level=2 or Level=3)'}
     # Query through a fixed watermark. Record IDs rather than wall time survive clock changes.
     if($cursor -and [long]$cursor.recordId -le $latestId){$position='EventRecordID > '+[long]$cursor.recordId}
     else {$position="TimeCreated[@SystemTime >= '"+$now.UtcDateTime.AddDays(-7).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']"}
@@ -71,7 +71,8 @@ function Copy-EvidenceTail($source,$destination,[long]$maxBytes=8MB) {
         # A final incomplete JSONL row is omitted; the original remains intact.
         $lastNewline=$text.LastIndexOf("`n")
         $text=if($lastNewline -ge 0){$text.Substring(0,$lastNewline+1)}else{''}
-        [IO.File]::WriteAllText($destination,$text,$script:EvidenceUtf8)
+        $output=[IO.FileStream]::new($destination,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+        try {$bytes=$script:EvidenceUtf8.GetBytes($text);$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()}
         return @{source=$source;sourceBytes=$length;copiedBytes=(Get-Item -LiteralPath $destination).Length;tailLimited=($start -gt 0);sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
     }finally{$stream.Dispose()}
 }

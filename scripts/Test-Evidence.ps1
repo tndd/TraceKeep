@@ -41,4 +41,12 @@ Save-EvidenceJson (Join-Path $root 'empty.json') @()
 Assert (((Get-Content (Join-Path $root 'empty.json') -Raw) -replace '\s','') -eq '[]') 'Empty event batch must serialize as an array'
 Save-EvidenceJson (Join-Path $root 'null.json') $null
 Assert ((Get-Content (Join-Path $root 'null.json') -Raw).Trim() -eq 'null') 'Missing value must serialize explicitly'
+$boot=[DateTimeOffset]::Now.AddMinutes(-5)
+$script:event.Id=41;$script:event.TimeCreated=$boot.LocalDateTime.AddSeconds(5)
+$bundle=New-IncidentBundle $root $root $boot @{settings=@{};os=@{}}
+$manifest=Get-Content (Join-Path $bundle 'manifest.json') -Raw|ConvertFrom-Json
+Assert ($manifest.classification -eq 'abnormal-boot-evidence' -and $manifest.abnormalEventCount -eq 1) 'Boot event must classify the saved evidence'
+$hash=(Get-FileHash (Join-Path $bundle 'manifest.json')).Hash
+$null=New-IncidentBundle $root $root $boot @{settings=@{changed=$true}}
+Assert ((Get-FileHash (Join-Path $bundle 'manifest.json')).Hash -eq $hash) 'Repeated worker starts must preserve the boot bundle'
 Write-Output 'PASS: durable checkpoint ordering, time-independent recovery, log reset, corrupt-state fallback, raw XML, bounded tails and partial-write handling.'

@@ -56,4 +56,21 @@ $failedHash=(Get-FileHash (Join-Path $bundle 'manifest.json')).Hash
 $null=New-IncidentBundle $root $root $boot @{settings=@{}}
 $recovery=Get-Content (Join-Path $bundle 'event-recovery.json') -Raw|ConvertFrom-Json
 Assert ($recovery.eventCount -eq 1 -and (Get-FileHash (Join-Path $bundle 'manifest.json')).Hash -eq $failedHash) 'Recovery must add missing events without replacing original evidence'
+# Build Japanese text from code points so the test source itself is ASCII and
+# exercises UTF-8 without BOM under Windows PowerShell 5.1's ANSI default.
+$japanese=-join (@(0x6307,0x5B9A,0x3055,0x308C,0x305F,0x30AF,0x30A8,0x30EA,0x306F,0x7121,0x52B9,0x3067,0x3059,0x3002)|ForEach-Object {[char]$_})
+$unicodeBoot=$boot.AddDays(-1)
+$unicodeBundle=New-IncidentBundle $root $root $unicodeBoot @{settings=@{}}
+$unicodeManifest=Get-Content -Encoding UTF8 (Join-Path $unicodeBundle 'manifest.json') -Raw|ConvertFrom-Json
+$unicodeManifest.errors=@($japanese)
+Save-EvidenceJson (Join-Path $unicodeBundle 'manifest.json') $unicodeManifest
+$null=New-IncidentBundle $root $root $unicodeBoot @{settings=@{}}
+$unicodeRecovery=Get-Content -Encoding UTF8 (Join-Path $unicodeBundle 'event-recovery.json') -Raw|ConvertFrom-Json
+Assert ($unicodeRecovery.originalErrors[0] -ceq $japanese) 'BOM-less UTF-8 Japanese failure must survive recovery under Windows PowerShell 5.1'
+$ready=[pscustomobject]@{event='heartbeat';time=[DateTimeOffset]::Now.ToString('o');errors=@();channels=@(@{channel='System';watermark=123})}
+Assert (Test-EvidenceReady $ready ([DateTimeOffset]::Now.AddMinutes(-1))) 'Usable current heartbeat must pass'
+$ready.errors=@(@{error=$japanese})
+Assert (-not(Test-EvidenceReady $ready ([DateTimeOffset]::Now.AddMinutes(-1)))) 'Evidence errors must prevent successful upgrade'
+$ready.errors=@();$ready.time=[DateTimeOffset]::Now.AddHours(-1).ToString('o')
+Assert (-not(Test-EvidenceReady $ready ([DateTimeOffset]::Now.AddMinutes(-1)))) 'Old heartbeat must not validate a new upgrade'
 Write-Output 'PASS: durable checkpoint ordering, time-independent recovery, log reset, corrupt-state fallback, raw XML, bounded tails and partial-write handling.'

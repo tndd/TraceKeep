@@ -5,8 +5,8 @@ $codeRoot=Join-Path $env:ProgramFiles 'PCDiagnostics';$dataRoot=Join-Path $env:P
 $package=Split-Path $PSScriptRoot
 $shell=Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $manager=Join-Path $codeRoot 'management\Manage-Recorder.ps1'
-$manifest=Get-Content (Join-Path $package 'update-manifest.json') -Raw|ConvertFrom-Json
-$migration=Get-Content (Join-Path $dataRoot 'migration.json') -Raw|ConvertFrom-Json
+$manifest=Get-Content -Encoding UTF8 (Join-Path $package 'update-manifest.json') -Raw|ConvertFrom-Json
+$migration=Get-Content -Encoding UTF8 (Join-Path $dataRoot 'migration.json') -Raw|ConvertFrom-Json
 if($migration.phase -ne 'active'){throw 'The unified installation must be active before upgrading.'}
 $task=Get-ScheduledTask -TaskName 'PC Diagnostics Recorder'
 if($task.State -ne 'Running' -or $task.Actions.Count -ne 1 -or $task.Actions[0].Execute -ine $shell -or -not $task.Actions[0].Arguments.Contains('"'+(Join-Path $codeRoot 'management\Run-Recorder.ps1')+'"')){throw 'Unexpected or stopped recorder task; no changes made.'}
@@ -41,7 +41,7 @@ try {
     $deadline=(Get-Date).AddSeconds(120);$verified=$false
     do {
         $file=Get-ChildItem -LiteralPath $logRoot -Filter 'evidence-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
-        if($file){$row=Get-Content -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;if($row.event -eq 'heartbeat' -and ([DateTimeOffset]$row.time) -ge $since -and @($row.channels|Where-Object channel -EQ 'System').Count){$verified=$true;break}}
+        if($file){$row=Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;if(Test-EvidenceReady $row $since){$verified=$true;break};if($row.event -eq 'heartbeat' -and ([DateTimeOffset]$row.time) -ge $since -and @($row.errors).Count -gt 0){throw 'Evidence worker reported errors; update cannot be marked successful. Inspect the retained evidence log.'}}
         Start-Sleep -Seconds 2
     }while((Get-Date) -lt $deadline)
     if(-not $verified){throw 'Evidence worker did not verify System event checkpointing'}

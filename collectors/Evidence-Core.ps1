@@ -1,4 +1,7 @@
 $script:EvidenceUtf8=[Text.UTF8Encoding]::new($false)
+function Test-EvidenceReady($row,[DateTimeOffset]$since) {
+    return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0
+}
 function Save-EvidenceJson($path,$value) {
     $temp=$path+'.tmp'
     $json=if($null -eq $value){'null'}else{ConvertTo-Json -InputObject $value -Depth 12}
@@ -18,7 +21,7 @@ function Get-EvidenceCursor($stateRoot,$channel) {
     $path=Join-Path $stateRoot ($key+'.json')
     if(Test-Path -LiteralPath $path){
         foreach($candidate in @($path,($path+'.previous'))){
-            try {$c=Get-Content -LiteralPath $candidate -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop;if($c.channel -eq $channel -and $null -ne $c.recordId){return $c}}catch{}
+            try {$c=Get-Content -Encoding UTF8 -LiteralPath $candidate -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop;if($c.channel -eq $channel -and $null -ne $c.recordId){return $c}}catch{}
         }
         throw "No valid event checkpoint for $channel; refusing to silently skip history"
     }
@@ -119,7 +122,7 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     $dest=Join-Path $parent ('boot-'+$key)
     $manifestPath=Join-Path $dest 'manifest.json'
     if(Test-Path -LiteralPath $manifestPath){
-        $existing=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+        $existing=Get-Content -Encoding UTF8 -LiteralPath $manifestPath -Raw|ConvertFrom-Json
         if(@($existing.errors).Count -gt 0 -and -not(Test-Path -LiteralPath (Join-Path $dest 'event-recovery.json'))){
             # Preserve the original snapshot and failure manifest. Add a recovery
             # supplement without replacing any original sensor or event files.

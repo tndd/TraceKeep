@@ -11,7 +11,7 @@ $utf8=[Text.UTF8Encoding]::new($false)
 $intervals=@{cpu=2000;board=2000;activity=2000}
 $configuration=Join-Path $DataRoot 'recorder-settings.json'
 if(Test-Path -LiteralPath $configuration){
-    $settings=Get-Content -LiteralPath $configuration -Raw|ConvertFrom-Json
+    $settings=Get-Content -Encoding UTF8 -LiteralPath $configuration -Raw|ConvertFrom-Json
     foreach($name in @('cpu','board','activity')){
         if($null -ne $settings.intervalMilliseconds.$name){
             $value=[int]$settings.intervalMilliseconds.$name
@@ -65,7 +65,7 @@ try {
             } else {$w.state=if($null -ne $age -and $age -le $freshLimit){'recording'}else{'waiting-for-samples'}}
             $w.errorCount=0
             if($w.name -eq 'evidence' -and $file){
-                try {$row=Get-Content -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
+                try {$row=Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
             }
         }
         $runtime=@{time=$now.ToString('o');pid=$PID;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}

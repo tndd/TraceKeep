@@ -23,6 +23,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1
       - name: Evidence recovery and partial-write handling
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Evidence.ps1
+      - name: Isolated update success and failure recovery
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-EvidenceUpgrade.ps1
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
         with:
           path: |

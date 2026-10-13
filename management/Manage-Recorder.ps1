@@ -46,7 +46,7 @@ function Verify-Fresh([DateTimeOffset]$since,[int]$TimeoutSeconds=40){
         $ready=$true
         foreach($prefix in @('cpu-auto-','board-auto-','activity-')){
             $file=Get-ChildItem -LiteralPath $logRoot -Filter ($prefix+'*.jsonl')|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
-            $records=if($file){@(Get-Content -LiteralPath $file.FullName -Tail 5|ForEach-Object {try{$_|ConvertFrom-Json}catch{}})}else{@()}
+            $records=if($file){@(Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 5|ForEach-Object {try{$_|ConvertFrom-Json}catch{}})}else{@()}
             $fresh=@($records|Where-Object {$_.time -and ([DateTimeOffset]$_.time) -ge $since})
             if($fresh.Count -lt 3 -or ([DateTimeOffset]::Now-([DateTimeOffset]$fresh[-1].time)).TotalSeconds -gt 10){$ready=$false;continue}
             if($prefix -eq 'cpu-auto-' -and -not @($fresh[-1].sensors|Where-Object type -EQ 'Temperature').Count){$ready=$false}
@@ -62,7 +62,7 @@ function Restore-Legacy($state){
     Stop-Unified
     if(Test-Path (Join-Path $dataRoot 'sources.json')){Move-Item -LiteralPath (Join-Path $dataRoot 'sources.json') -Destination (Join-Path $dataRoot 'sources.inactive.json') -Force}
     foreach($old in $state.tasks){
-        Register-ScheduledTask -TaskName $old.name -Xml (Get-Content -LiteralPath $old.xml -Raw) -Force|Out-Null
+        Register-ScheduledTask -TaskName $old.name -Xml (Get-Content -Encoding UTF8 -LiteralPath $old.xml -Raw) -Force|Out-Null
         if($old.running){Start-ScheduledTask -TaskName $old.name}
     }
     if($state.startupBackup -and (Test-Path -LiteralPath $state.startupBackup)){Copy-Item -LiteralPath $state.startupBackup -Destination $state.startupPath -Force}
@@ -81,7 +81,7 @@ function Restore-Legacy($state){
 }
 if($Action -eq 'rollback'){
     if(-not(Test-Path $statePath)){throw 'No migration record exists.'}
-    $state=Get-Content -LiteralPath $statePath -Raw|ConvertFrom-Json
+    $state=Get-Content -Encoding UTF8 -LiteralPath $statePath -Raw|ConvertFrom-Json
     if($state.phase -eq 'rolled-back'){Write-Output 'Legacy recording was already restored.';exit 0}
     Restore-Legacy $state
     Write-Output 'Legacy tasks and startup entry restored. All old and unified logs retained.';exit 0

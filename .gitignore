@@ -18,3 +18,7 @@ snapshots/
 .env*
 console-state.json
 __pycache__/
+
+/frontend/node_modules/
+/ui/dashboard/
+/frontend/public/*.local.json

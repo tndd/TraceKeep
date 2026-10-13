@@ -13,6 +13,11 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Stable Rust
         run: rustup toolchain install stable --profile minimal
+      - name: Build production dashboard
+        run: |
+          npm ci --prefix frontend
+          npm test --prefix frontend
+          npm run build --prefix frontend
       - name: JavaScript syntax
         run: |
           node --check ui/app.js

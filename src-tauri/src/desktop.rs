@@ -39,8 +39,16 @@ pub fn installed_cli()->Result<PathBuf,String>{
 }
 pub fn control_recorder(action:&str)->Result<(),String>{
     let action=validate_action(action)?;
+    elevated_cli(action)
+}
+pub fn configure_module(module:&str,enabled:bool)->Result<(),String>{
+    const ALLOWED:&[&str]=&["cpu","board","activity","events","storage","nvme","nvmeErrors","crashConfiguration","incidents","performance","gpuDetails","processes","inventory","reliability","power","dumpArchive","werArchive","diskSpace","automaticDump"];
+    if !ALLOWED.contains(&module){return Err("Unknown module".into());}
+    elevated_cli(&format!("config {} {}",if enabled{"enable"}else{"disable"},module))
+}
+fn elevated_cli(args:&str)->Result<(),String>{
     let executable=wide(&installed_cli()?.to_string_lossy());
-    let arguments=wide(action);let verb=wide("runas");
+    let arguments=wide(args);let verb=wide("runas");
     // Elevate only the installed CLI, never a script beside a portable viewer.
     unsafe{
         let com_result=CoInitializeEx(null(),(COINIT_APARTMENTTHREADED|COINIT_DISABLE_OLE1DDE) as u32);

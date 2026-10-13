@@ -40,6 +40,10 @@ fn display(v:&Value){
 fn run()->Result<i32,String>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     let command=args.first().map(String::as_str).unwrap_or("help");
+    if command=="history" {
+        if args.len()!=3{return Err("Use: pcdiag history START_RFC3339 END_RFC3339 (at most two hours)".into());}
+        println!("{}",diagnostics_core::history::query(&Sources::load()?,&args[1],&args[2])?);return Ok(0);
+    }
     #[cfg(windows)]
     if command=="tray" {
         use diagnostics_core::desktop;
@@ -55,6 +59,7 @@ fn run()->Result<i32,String>{
         }return Ok(0);
     }
     if ["help","--help","-h"].contains(&command){
+        println!("pcdiag history START_RFC3339 END_RFC3339  (read-only JSON, at most two hours)");
         println!("pcdiag tray [--mini|--full|--tray]\npcdiag tray startup on|off|status\nWindow X keeps recording in the tray. Tray Exit stops recording (UAC) before exiting.");
         println!("pcdiag config show\npcdiag config enable|disable MODULE\npcdiag config interval MODULE SECONDS\npcdiag coverage\nConfiguration changes restart a running recorder; existing logs are retained.");
         println!("pcdiag status [--json]\npcdiag watch [--json]\npcdiag logs\npcdiag export\npcdiag doctor [--json]\npcdiag evidence\npcdiag incidents\npcdiag install --legacy-activity-root PATH\npcdiag upgrade\npcdiag start | stop | restart | rollback\n\nThe GUI is optional. Control/install/upgrade commands require an Administrator terminal.\nExit codes: 0 success, 1 command failure, 2 stale/missing/error streams.");return Ok(0);

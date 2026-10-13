@@ -5,6 +5,18 @@ use serde_json::{json,Value};
 use tauri::{Manager,menu::{Menu,MenuItem,CheckMenuItem},tray::{TrayIconBuilder,TrayIconEvent,MouseButton,MouseButtonState}};
 type Shared=Arc<Mutex<Monitor>>;
 static VIEW_LOCK:Mutex<()>=Mutex::new(());
+static HISTORY_BUSY:AtomicBool=AtomicBool::new(false);
+#[tauri::command]
+async fn query_history(start:String,end:String)->Result<Value,String>{
+    if HISTORY_BUSY.swap(true,Ordering::SeqCst){return Err("記録を読み込み中です。".into());}
+    let result=tauri::async_runtime::spawn_blocking(move||diagnostics_core::history::query(&Sources::load()?,&start,&end)).await.map_err(|e|e.to_string()).and_then(|v|v);
+    HISTORY_BUSY.store(false,Ordering::SeqCst);result
+}
+#[tauri::command]
+fn export_history_view(value:Value)->Result<String,String>{
+    if value.to_string().len()>64*1024*1024{return Err("Export exceeds 64 MiB".into());}
+    export_snapshot(&value).map(|p|p.to_string_lossy().into_owned())
+}
 #[derive(Default)]struct Control {busy:AtomicBool,message:Mutex<String>}
 
 #[tauri::command]
@@ -32,6 +44,12 @@ fn viewer_state(state:tauri::State<'_,Control>)->Result<Value,String>{
 #[tauri::command]
 fn set_viewer_startup(enabled:bool)->Result<(),String>{desktop::set_startup(enabled,&std::env::current_exe().map_err(|e|e.to_string())?)}
 
+#[tauri::command]
+async fn configure_module(app:tauri::AppHandle,module:String,enabled:bool)->Result<(),String>{
+    if app.state::<Control>().busy.swap(true,Ordering::SeqCst){return Err("記録操作は実行中です。".into());}
+    let result=tauri::async_runtime::spawn_blocking(move||desktop::configure_module(&module,enabled)).await.map_err(|e|e.to_string()).and_then(|v|v);
+    app.state::<Control>().busy.store(false,Ordering::SeqCst);result
+}
 // Only explicit user actions reach this function. UAC failure never exits the tray.
 async fn control(app:tauri::AppHandle,action:String,exit_after:bool)->Result<(),String>{
     desktop::validate_action(&action)?;
@@ -50,7 +68,7 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     let _opening=VIEW_LOCK.lock().map_err(|e|e.to_string())?;
     let (label,url,title,width,height)=match view {
         "mini"=>("mini","mini.html","TraceKeep · ミニモニター",300.,228.),
-        "full"=>("main","index.html","TraceKeep · 詳細",1320.,900.),
+        "full"=>("main","dashboard/index.html","TraceKeep · 詳細",1320.,900.),
         _=>return Err("Unknown view".into())
     };
     if let Some(window)=app.get_webview_window(label){window.unminimize().map_err(|e|e.to_string())?;window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;return Ok(());}
@@ -83,7 +101,7 @@ fn main(){
     let Some(instance)=desktop::Instance::acquire(view).expect("Unable to register tray instance") else{return;};
     let sources=Sources::load().unwrap_or_default();
     let app=tauri::Builder::default().manage(Arc::new(Mutex::new(Monitor::new(sources)))).manage(Control::default())
-        .invoke_handler(tauri::generate_handler![get_snapshot,save_snapshot,set_sources,viewer_state,set_viewer_startup,recorder_action,open_view])
+        .invoke_handler(tauri::generate_handler![get_snapshot,save_snapshot,set_sources,viewer_state,set_viewer_startup,recorder_action,open_view,query_history,export_history_view,configure_module])
         .on_window_event(|window,event|{
             if let tauri::WindowEvent::CloseRequested{api,..}=event{
                 api.prevent_close();

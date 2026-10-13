@@ -2,6 +2,12 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
   "description": "Local diagnostic viewer only",
-  "windows": ["main", "mini"],
-  "permissions": ["core:default"]
+  "windows": [
+    "main",
+    "mini"
+  ],
+  "permissions": [
+    "core:default",
+    "core:window:allow-close"
+  ]
 }

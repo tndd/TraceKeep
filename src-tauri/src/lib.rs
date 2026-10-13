@@ -7,6 +7,7 @@ const MAX_READ: u64 = 8 * 1024 * 1024;
 const HISTORY: usize = 450;
 
 pub mod recorder_status;
+pub mod history;
 #[cfg(windows)]
 pub mod desktop;
 #[cfg(windows)]

@@ -39,5 +39,6 @@ export function buildModel(raw){
  const root=roots[0]||nodes.sort((a,b)=>(b.memoryMiB||0)-(a.memoryMiB||0))[0];const processTree=root?{...root,children:children(root)}:{name:'未取得',children:[]};
  const sources=[['CPU',cpu],['基板',board],['GPU・負荷',activity],['性能',perf],['プロセス',pro]].map(([name,rs])=>({name,count:rs.length,first:rs[0]?.time,last:rs.at(-1)?.time,maxGap:rs.length>1?Math.max(...rs.slice(1).map((r,i)=>(Date.parse(r.time)-Date.parse(rs[i].time))/1000)):null}));
  const D={states,matrix,transitions,capBins,capTotal:capBins.some(b=>b.intervals)?capTotal:null,capRejected,clocks,cpuTime:cpu.at(-1)?.time,disk,processTree,processTime:pro.at(-1)?.time,processTotal:ps.length,modules:raw.settings?.modules||{},sources,events:E.events.filter(e=>[41,6008,1001].includes(e.id)),capFlags:[...new Set(E.gpu.map(g=>g.flag).filter(Boolean))]};
- return {D,E,raw};
+ // Release raw sensor payloads after normalization; retain query provenance and bounds.
+ return {D,E,raw:{...raw,streams:Object.fromEntries(Object.entries(raw.streams||{}).map(([k,v])=>[k,{...v,rows:undefined,retainedRows:v.rows?.length||0}]))}};
 }

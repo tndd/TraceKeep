@@ -8,3 +8,8 @@
 - Test log truncation, partial writes, missing data and stale data using synthetic fixtures.
 - Run `cargo test` and a Windows release build for Rust changes. Verify UI states against real or clearly labelled synthetic data.
 - Keep the frontend local, dependency-light and usable without external network requests.
+
+- Full workspace source is frontend/. Run its unit tests and build before Rust compilation.
+- Keep summary diagnostic-focused, with one representative for each device category. CPU summary uses paired load/temperature distribution with marginals.
+- Event cells are five-minute aggregates, not durations. Every displayed time is relative to the selected real period.
+- No real-data fixture may be placed in ui/ when packaging: Tauri embeds frontend assets. Browser verification fixtures belong only in private outputs outside this repository.

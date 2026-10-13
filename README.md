@@ -130,3 +130,44 @@ When all windows are closed, only a bounded CPU log tail (256 KiB per read, one 
 TraceKeep is the product display name. Existing `pcdiag` commands, executable names, scheduled task and data paths remain compatible with previous installations.
 
 The compact temperature gauges use one uniform arc color that changes only with the current temperature, without colored scale ticks. Display anchors: CPU green through 70 °C, yellow at 85 °C, red at 95 °C; GPU green through 60 °C, yellow at 75 °C, red at 90 °C, with interpolation between anchors. These are visual conventions, not hardware protection limits or fault diagnoses. Both arc lengths use a 0–100 °C display scale, capped at the end while the number preserves higher valid readings. Missing/stale readings show an empty gray track.
+
+
+## Device workspace (production desktop)
+
+The full Tauri window now opens the device workspace: summary, CPU, GPU, disk,
+motherboard, memory/processes, Windows events and collection settings. The summary
+CPU chart plots simultaneous CPU load/temperature samples with marginal distributions.
+Charts are computed from local records; no private fixture or external web resource is
+bundled. Mini-window and tray behavior are preserved.
+
+Use the end-time field to load the preceding two hours, or select the latest two hours.
+History is refreshed explicitly; the recorder status is checked separately every five
+seconds. Historical temperatures are never presented as current tray readings.
+`pcdiag history START_RFC3339 END_RFC3339` exposes the same read-only Rust query in JSON.
+The viewer's period export goes into the existing per-user snapshots directory.
+
+Read bounds are explicit: at most four nearby dated files per stream, 128 MiB from each
+file's tail, 100,000 rows and 32 MiB retained output per stream. Large-file tails, invalid
+lines, unresolved unchanged-result references and read failures are reported. A clipped
+range is not complete coverage. The last two process/GPU-detail samples are retained;
+CPU, board, activity, performance, event and storage records use the bounded full range.
+Very late recovered events outside the nearby file dates are not included in that query;
+original JSONL archives and incident manifests remain the source of record.
+
+The current sensor name mappings target the installed AMD/Nuvoton collector. Unsupported
+metrics remain unavailable. GPU/NVMe detail views use the first recorded device; disk
+latency distributions include all recorded physical disks. CPU distribution uses only
+paired valid readings. NVMe counter arithmetic preserves decimal integer precision;
+reset/decreasing or insufficient samples show unavailable. GPU counter resets, long gaps
+and session changes are excluded. Time-series paths break across missing intervals.
+Event cells are five-minute bins, not event durations. Original event records are
+retained locally; high-volume PowerShell XML is omitted from the viewer response.
+
+Collection switches use the installed CLI with UAC and explicit confirmation. They
+restart a running recorder. Starting/stopping recording and startup settings use the
+existing desktop commands. Merely opening the viewer or querying a period never polls
+hardware or changes recorder state.
+
+Build the frontend before Rust: `npm ci --prefix frontend`, `npm test --prefix frontend`,
+`npm run build --prefix frontend`, then run the Rust tests and release build above.
+Generated dashboard files, test captures, real histories and binaries are not committed.

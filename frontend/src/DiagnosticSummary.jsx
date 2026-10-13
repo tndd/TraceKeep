@@ -21,10 +21,10 @@ function BoardDistribution({onPick}){const {E}=useData();
 export function DiagnosticSummary({onGo,onEvent,onInspect,onPick,eventChart,cpuChart}){const {D,E}=useData();const first=E.storage.find(s=>s.nvme.status==='ok')?.nvme.health?.counters||{},last=E.storage.filter(s=>s.nvme.status==='ok').at(-1)?.nvme.health?.counters||{},errors=E.events.filter(e=>e.level>0&&e.level<=2),delta=k=>E.nvmeDelta(k)===null?'—':'+'+E.nvmeDelta(k),time=t=>t?new Date(t).toLocaleTimeString():'—';
  return <div className="diagnostic-summary">
   <div className="diagnostic-strip">
-   <button onClick={()=>onGo('settings')}><span>保存済みの時系列</span><strong>{D.sources.length}<small>系統</small></strong><em>CPU・基板・GPU・性能・プロセス</em><ArrowUpRightIcon/></button>
+   <button onClick={()=>onGo('settings')}><span>保存済みの時系列</span><strong>{D.sources.filter(s=>s.count>0).length}<small>系統</small></strong><em>CPU・基板・GPU・性能・プロセス</em><ArrowUpRightIcon/></button>
    <button onClick={()=>onGo('events')}><span>Windowsエラー</span><strong className="amber-text">{errors.reduce((n,e)=>n+e.count,0)}<small>件</small></strong><em>選択期間 / 内容を確認</em><ArrowUpRightIcon/></button>
-   <button onClick={()=>onGo('disk')}><span>NVMe異常終了カウンター</span><strong>{delta('unsafeShutdowns')}<small>回</small></strong><em>期間内の増分 · 累積 {last.unsafeShutdowns}回</em><ArrowUpRightIcon/></button>
-   <button onClick={()=>onInspect('NVMeカウンターの比較',{period:E.period,firstMinute:E.storage[0]?.t,lastMinute:E.storage.at(-1)?.t,first,last,note:'標本間の増分。故障の有無を保証するものではありません。'})}><span>NVMeメディアエラー</span><strong>{delta('mediaErrors')}<small>件</small></strong><em>期間内の増分 · 累積 {last.mediaErrors}件</em><ArrowUpRightIcon/></button>
+   <button onClick={()=>onGo('disk')}><span>NVMe異常終了カウンター</span><strong>{delta('unsafeShutdowns')}<small>回</small></strong><em>期間内の増分 · 累積 {last.unsafeShutdowns??'—'}回</em><ArrowUpRightIcon/></button>
+   <button onClick={()=>onInspect('NVMeカウンターの比較',{period:E.period,firstMinute:E.storage[0]?.t,lastMinute:E.storage.at(-1)?.t,first,last,note:'標本間の増分。故障の有無を保証するものではありません。'})}><span>NVMeメディアエラー</span><strong>{delta('mediaErrors')}<small>件</small></strong><em>期間内の増分 · 累積 {last.mediaErrors??'—'}件</em><ArrowUpRightIcon/></button>
   </div>
 
   <div className="three-grid diagnostic-plots">
@@ -49,7 +49,7 @@ export function DiagnosticSummary({onGo,onEvent,onInspect,onPick,eventChart,cpuC
     <p className="diagnostic-caption">+12Vの実測度数。基板の表示名は未検証。AC入力やPSU内部の直接測定ではありません。</p>
    </Panel>
    <Panel title="プロセス群のメモリ構成" eyebrow="MEMORY / PROCESS FAMILY" action={<button className="text-button" onClick={()=>onGo('memory')}>メモリ <ArrowUpRightIcon/></button>}>
-    <div className="panel-stat">{D.processTree.children.length+1}<small>プロセス / {D.processTree.name} · {time(D.processTime)}</small></div>
+    <div className="panel-stat">{D.processTree.id==null?0:D.processTree.children.length+1}<small>プロセス / {D.processTree.name} · {time(D.processTime)}</small></div>
     <Pack compact onPick={onPick}/>
     <p className="diagnostic-caption">面積＝Working Set、濃さ＝CPU秒。選択した親子群のみ、共有メモリの重複を含みます。</p>
    </Panel>

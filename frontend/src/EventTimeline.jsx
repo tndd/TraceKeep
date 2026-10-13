@@ -2,7 +2,7 @@ import React from 'react';
 import * as d3 from 'd3';
 import {Chart,txt} from './Charts';
 
-const levelColor=n=>n<=2?'#ff8895':n===3?'#e8b76d':'#69b5dc';
+const levelColor=n=>n>0&&n<=2?'#ff8895':n===3?'#e8b76d':'#69b5dc';
 
 export function EventTimeline({compact=false,onPick,events=[]}){
  const {E}=useData();const time=t=>clock(E.start,t); const providers=[...new Set(events.map(e=>e.provider))];
@@ -14,7 +14,7 @@ export function EventTimeline({compact=false,onPick,events=[]}){
    txt(s,0,top+step/2+4,label.slice(0,w<500?16:compact?22:30));
    for(let b=0;b<24;b++){
     const bucket=events.filter(e=>e.provider===p&&e.t>=b*5&&e.t<(b+1)*5),n=d3.sum(bucket,e=>e.count);
-    const lead=[...bucket].sort((a,b)=>a.level-b.level||a.t-b.t)[0];
+    const lead=[...bucket].sort((a,b)=>(a.level||4)-(b.level||4)||a.t-b.t)[0];
     const width=Math.max(1,x((b+1)*5)-x(b*5)-2),height=Math.max(10,step-7);
     const cell=s.append('rect').attr('x',x(b*5)+1).attr('y',top).attr('width',width).attr('height',height).attr('rx',2)
      .attr('fill',lead?levelColor(lead.level):'#142832').attr('stroke',lead?levelColor(lead.level):'#243b47').attr('stroke-opacity',.75).attr('fill-opacity',lead?.78:1);
@@ -33,3 +33,5 @@ export function EventTimeline({compact=false,onPick,events=[]}){
   s.append('g').attr('class','axis').attr('transform',`translate(0,${bottom})`).call(d3.axisBottom(x).tickValues([0,20,40,60,80,100,120]).tickFormat(time));
  }}/><p className="event-grid-note">1マス＝5分の集計区間（イベントの継続時間ではありません）。暗いマス＝この保存データに該当記録なし。</p></>
 }
+
+import {useData,clock} from './DataContext';

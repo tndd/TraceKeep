@@ -65,7 +65,7 @@ $shortcut.Save()
 [TraceKeepInstallerNative]::SHChangeNotify(0x08000000,0,[IntPtr]::Zero,[IntPtr]::Zero)
 $recognized=if($Startup){@((Get-CimInstance Win32_StartupCommand -ErrorAction Stop)|Where-Object {$_.Name -eq 'TraceKeep' -and $_.Command -eq ('"'+$target+'" --tray')}).Count -eq 1}else{$null}
 $viewerProcess=if(-not $NoLaunch){Start-Process -FilePath $target -ArgumentList '--tray' -WorkingDirectory $destination -WindowStyle Hidden -PassThru}else{$null}
-$report=[pscustomobject]@{status=if($Startup -and -not $recognized){'Viewer installed; Windows startup recognition needs investigation'}else{'TraceKeep installed'};time=[DateTimeOffset]::Now.ToString('o');executable=$target;physicalDirectoryVerified=$true;icon=$iconTarget;startMenuShortcut=$shortcutPath;startupRequested=[bool]$Startup;windowsStartupRecognized=$recognized;viewerPid=if($viewerProcess){$viewerProcess.Id}else{$null};launchMode='tray';recorderChanged=$false;signInTested=$false}
+$report=[pscustomobject]@{status=if($Startup -and -not $recognized){'Viewer installed; Windows startup recognition needs investigation'}else{'TraceKeep installed'};time=[DateTimeOffset]::Now.ToString('o');executable=$target;physicalDirectoryVerified=$true;icon=$iconTarget;startMenuShortcut=$shortcutPath;startupRequested=[bool]$Startup;windowsStartupRecognized=$recognized;viewerPid=if($viewerProcess){$viewerProcess.Id}else{$null};launchMode='tray';recorderFilesChanged=$false;resumeOnLaunch='Requests elevation only for a confirmed stopped recorder';signInTested=$false}
 $json=$report|ConvertTo-Json
 [IO.File]::WriteAllText((Join-Path $PSScriptRoot 'tray-install-result.local.json'),$json,[Text.UTF8Encoding]::new($false))
 $json

@@ -20,7 +20,7 @@ try {
  if($link.TargetPath -ne $result.executable -or $link.Arguments -ne '--tray' -or $link.IconLocation -ne ($result.icon+',0')){throw ('Start-menu shortcut mismatch: '+(@{actualTarget=$link.TargetPath;expectedTarget=$result.executable;arguments=$link.Arguments;actualIcon=$link.IconLocation;expectedIcon=($result.icon+',0')}|ConvertTo-Json -Compress))}
  if((Get-FileHash -LiteralPath $Executable).Hash -ne (Get-FileHash -LiteralPath $result.executable).Hash){throw 'Installed executable mismatch'}
  if((Get-FileHash -LiteralPath $Executable).Hash -ne (Get-FileHash -LiteralPath (Join-Path (Split-Path $result.executable) 'pc-diagnostics.exe')).Hash){throw 'Legacy CLI viewer alias mismatch'}
- if($result.recorderChanged -or (Test-Path (Join-Path $env:ProgramData 'PCDiagnostics\sources.json'))){throw 'Viewer installation changed the recorder'}
+ if($result.recorderFilesChanged -or (Test-Path (Join-Path $env:ProgramData 'PCDiagnostics\sources.json'))){throw 'Viewer installation changed the recorder'}
  Write-Output 'PASS: physical install, Windows startup inventory, branded shortcut/icon, CLI alias, no recorder installation'
 } finally {
  Remove-ItemProperty -LiteralPath $key -Name TraceKeep -ErrorAction SilentlyContinue

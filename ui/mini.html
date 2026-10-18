@@ -7,5 +7,5 @@
     <div id="gpu-gauge" class="gauge" tabindex="0"><canvas id="gpu-arc" aria-hidden="true"></canvas><p><strong id="gpu">—</strong><span class="unit">°C</span></p><span class="eyebrow">GPU</span></div>
   </section>
   <section id="workers" class="workers" aria-label="各記録処理の稼働状態"></section>
-  <p id="notice" role="status" aria-live="polite"></p>
-</main><script src="mini-model.js"></script><script src="temperature-gauge.js"></script><script src="mini.js"></script></body></html>
+  <div id="notice" role="status" aria-live="polite" hidden><span id="notice-message"></span><button id="resume" hidden>記録を開始</button></div>
+</main><script src="mini-model.js"></script><script src="temperature-gauge.js"></script><script type="module" src="mini.js"></script></body></html>

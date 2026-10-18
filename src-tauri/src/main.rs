@@ -8,10 +8,11 @@ static VIEW_LOCK:Mutex<()>=Mutex::new(());
 static HISTORY_BUSY:AtomicBool=AtomicBool::new(false);
 // Local UI health marker for diagnosing blank or failed WebView loads. No log content.
 #[tauri::command]
-fn report_workspace_state(ready:bool,message:String)->Result<(),String>{
+fn report_workspace_state(ready:bool,message:String,view:Option<String>)->Result<(),String>{
     let root=diagnostics_core::app_dir();std::fs::create_dir_all(&root).map_err(|e|e.to_string())?;
     let value=json!({"ready":ready,"message":message.chars().take(500).collect::<String>(),"pid":std::process::id(),"time":chrono::Utc::now().to_rfc3339()});
-    std::fs::write(root.join("workspace-state.json"),value.to_string()).map_err(|e|e.to_string())
+    let name=match view.as_deref(){Some("mini")=>"mini-state.json",Some("full")|None=>"workspace-state.json",_=>return Err("Unknown view".into())};
+    std::fs::write(root.join(name),value.to_string()).map_err(|e|e.to_string())
 }
 #[tauri::command]
 async fn query_history(start:String,end:String)->Result<Value,String>{
@@ -24,7 +25,7 @@ fn export_history_view(value:Value)->Result<String,String>{
     if value.to_string().len()>64*1024*1024{return Err("Export exceeds 64 MiB".into());}
     export_snapshot(&value).map(|p|p.to_string_lossy().into_owned())
 }
-#[derive(Default)]struct Control {busy:AtomicBool,message:Mutex<String>}
+#[derive(Default)]struct Control {busy:AtomicBool,launch_checked:AtomicBool,message:Mutex<String>}
 
 #[tauri::command]
 async fn get_snapshot(state:tauri::State<'_,Shared>)->Result<Value,String>{
@@ -46,7 +47,7 @@ fn set_sources(sensor_root:String,activity_root:String,state:tauri::State<'_,Sha
 }
 #[tauri::command]
 fn viewer_state(state:tauri::State<'_,Control>)->Result<Value,String>{
-    Ok(json!({"busy":state.busy.load(Ordering::SeqCst),"message":state.message.lock().map_err(|e|e.to_string())?.clone(),"startup":desktop::startup_status()?}))
+    Ok(json!({"busy":state.busy.load(Ordering::SeqCst),"launchChecked":state.launch_checked.load(Ordering::SeqCst),"message":state.message.lock().map_err(|e|e.to_string())?.clone(),"startup":desktop::startup_status()?}))
 }
 #[tauri::command]
 fn set_viewer_startup(enabled:bool)->Result<(),String>{desktop::set_startup(enabled,&std::env::current_exe().map_err(|e|e.to_string())?)}
@@ -57,7 +58,8 @@ async fn configure_module(app:tauri::AppHandle,module:String,enabled:bool)->Resu
     let result=tauri::async_runtime::spawn_blocking(move||desktop::configure_module(&module,enabled)).await.map_err(|e|e.to_string()).and_then(|v|v);
     app.state::<Control>().busy.store(false,Ordering::SeqCst);result
 }
-// Only explicit user actions reach this function. UAC failure never exits the tray.
+// GUI launch may resume a confirmed stopped installation. UAC failure never
+// exits the tray; start/stop stay delegated to the protected installed CLI.
 async fn control(app:tauri::AppHandle,action:String,exit_after:bool)->Result<(),String>{
     desktop::validate_action(&action)?;
     {let state=app.state::<Control>();if state.busy.swap(true,Ordering::SeqCst){return Err("記録操作は実行中です。".into());}
@@ -161,7 +163,26 @@ fn main(){
     app.run(move|app,event|match event {
         // Display only after the event handlers are ready. A visible window during
         // setup can receive WM_CLOSE before the application's close handler exists.
-        tauri::RunEvent::Ready if view!="tray"=>request_view(app,view),
+        tauri::RunEvent::Ready=>{
+            if view!="tray" {request_view(app,view);}
+            let app=app.clone();
+            tauri::async_runtime::spawn(async move{
+                let coordinator=tauri::async_runtime::spawn_blocking(||{
+                    // A quick relaunch can still see the last fresh heartbeat of
+                    // the completed stop. Wait for that heartbeat to age out.
+                    let mut c=recorder_status::read_coordinator();
+                    for _ in 0..12 {
+                        if recorder_status::summary(&c)["state"]!="stopping" {break;}
+                        std::thread::sleep(std::time::Duration::from_secs(1));c=recorder_status::read_coordinator();
+                    }c
+                }).await;
+                let resume=coordinator.is_ok_and(|c|desktop::should_start_on_launch(&c));
+                app.state::<Control>().launch_checked.store(true,Ordering::SeqCst);
+                if resume {
+                    if control(app.clone(),"start".into(),false).await.is_err(){request_view(&app,"mini");}
+                }
+            });
+        },
         tauri::RunEvent::ExitRequested{code:None,api,..}=>api.prevent_exit(),
         _=>{}
     });

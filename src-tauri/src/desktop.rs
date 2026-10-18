@@ -32,6 +32,11 @@ impl Instance {
 pub fn validate_action(action:&str)->Result<&str,String>{
     if matches!(action,"start"|"stop"){Ok(action)}else{Err("Only start and stop are allowed from the viewer.".into())}
 }
+// A newly launched tray resumes an explicitly stopped installation. Unknown,
+// stale or unconfigured states never trigger automatic recorder operations.
+pub fn should_start_on_launch(coordinator:&serde_json::Value)->bool {
+    crate::recorder_status::summary(coordinator)["state"]=="stopped"
+}
 pub fn installed_cli()->Result<PathBuf,String>{
     let root=std::env::var_os("ProgramFiles").ok_or("ProgramFiles is unavailable")?;
     let path=PathBuf::from(root).join("PCDiagnostics/pcdiag.exe");
@@ -135,5 +140,10 @@ pub fn launch(view:&str)->Result<(),String>{
         assert_eq!(initial_view(["--full".to_owned()]),"full");
     }
     #[test]fn commands_are_not_arbitrary(){assert!(validate_action("stop").is_ok());for a in ["upgrade","stop; whoami","restart",""]{assert!(validate_action(a).is_err());}}
-    #[test]fn startup_quotes_paths_and_never_starts_recording(){let v=startup_command(Path::new("C:\\Apps With Space\\viewer.exe")).unwrap();assert_eq!(v,"\"C:\\Apps With Space\\viewer.exe\" --tray");assert!(startup_command(Path::new("bad\"path")).is_err());}
+    #[test]fn relaunch_only_resumes_a_confirmed_stopped_installation(){
+        use serde_json::json;
+        assert!(should_start_on_launch(&json!({"configured":true,"stopRequested":true,"heartbeatAgeSeconds":30})));
+        for c in [json!({}),json!({"configured":false,"stopRequested":true}),json!({"configured":true,"heartbeatAgeSeconds":30}),json!({"configured":true,"stopRequested":true,"heartbeatAgeSeconds":1})]{assert!(!should_start_on_launch(&c));}
+    }
+    #[test]fn startup_quotes_paths_and_launches_only_the_viewer(){let v=startup_command(Path::new("C:\\Apps With Space\\viewer.exe")).unwrap();assert_eq!(v,"\"C:\\Apps With Space\\viewer.exe\" --tray");assert!(startup_command(Path::new("bad\"path")).is_err());}
 }

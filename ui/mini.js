@@ -1,4 +1,8 @@
+import {createReadClient} from './native-requests.mjs';
 const $=id=>document.getElementById(id),invoke=window.__TAURI__?.core?.invoke;
+const read=invoke?createReadClient(invoke):null;
+let reported='';
+function notice(message=''){$('notice-message').textContent=message;$('notice').hidden=!message;}
 const workerNames={cpu:'CPU',board:'基板',activity:'GPU',evidence:'イベント',extended:'拡張'};
 const states={recording:'記録中',disabled:'収集対象外',stopped:'停止中',stale:'更新停止',missing:'未取得',error:'エラー',unknown:'未確認'};
 function render(data,control){
@@ -14,18 +18,22 @@ function render(data,control){
     TemperatureGauge.draw($(name+'-arc'),g);
   }
   $('workers').replaceChildren(...m.workers.map(w=>{const e=document.createElement('span');e.className='worker '+w.displayState;const dot=document.createElement('span');dot.className='worker-dot';dot.setAttribute('aria-hidden','true');e.append(dot,workerNames[w.name]||w.name);e.title=(workerNames[w.name]||w.name)+': '+(states[w.displayState]||w.displayState);e.setAttribute('aria-label',e.title);e.tabIndex=0;return e;}));
-  $('notice').textContent=control.message||'';
+  notice(control.message||(data.recorder?.state==='stopped'?'記録は停止中です。再開には管理者の確認が必要です。':''));
+  $('resume').hidden=!invoke||data.recorder?.state!=='stopped';$('resume').disabled=!!control.busy;
+  const health=JSON.stringify({recorder:data.recorder?.state||'unknown',launchChecked:!!control.launchChecked,cpuFresh:!!m.cpu.fresh,gpuFresh:!!m.gpu.fresh,workers:m.workers.map(w=>w.displayState)});
+  if(invoke&&health!==reported){reported=health;invoke('report_workspace_state',{ready:true,message:health,view:'mini'}).catch(()=>{});}
 }
 async function refresh(){try{
   let data,control;
-  if(invoke){[data,control]=await Promise.all([invoke('get_snapshot'),invoke('viewer_state')]);}
+  if(invoke){[data,control]=await Promise.all([read('get_snapshot'),read('viewer_state')]);}
   else{const response=await fetch('preview.local.json',{cache:'no-store'});if(!response.ok)throw Error('Tauriアプリから開いてください。');data=await response.json();control={};$('preview').hidden=false;}
   render(data,control);
 }catch(e){render({recorder:{state:'unknown',label:'取得できません'}},{message:String(e)});}finally{setTimeout(refresh,2000);}}
-$('full').onclick=async()=>{try{if(invoke)await invoke('open_view',{view:'full'});else location.href='index.html';}catch(e){$('notice').textContent=String(e);}};
-$('close').onclick=async()=>{try{if(invoke)await window.__TAURI__.window.getCurrentWindow().close();else $('notice').textContent='アプリではトレイに戻ります。記録は継続します。';}catch(e){$('notice').textContent=String(e);}};
+$('resume').onclick=async()=>{$('resume').disabled=true;notice('管理者権限の確認と記録の開始を待っています…');try{await invoke('recorder_action',{action:'start'});}catch(e){notice(String(e));}finally{$('resume').disabled=false;}};
+$('full').onclick=async()=>{try{if(invoke)await invoke('open_view',{view:'full'});else location.href='index.html';}catch(e){notice(String(e));}};
+$('close').onclick=async()=>{try{if(invoke)await window.__TAURI__.window.getCurrentWindow().close();else notice('アプリではトレイに戻ります。記録は継続します。');}catch(e){notice(String(e));}};
 document.querySelector('header').addEventListener('mousedown',async e=>{
   if(e.button!==0||e.target.closest('button')||!invoke)return;
-  try{await window.__TAURI__.window.getCurrentWindow().startDragging();}catch(e){$('notice').textContent=String(e);}
+  try{await window.__TAURI__.window.getCurrentWindow().startDragging();}catch(e){notice(String(e));}
 });
 refresh();

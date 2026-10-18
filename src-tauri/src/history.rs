@@ -32,8 +32,10 @@ fn read_stream(root:&Path,prefix:&str,a:i64,b:i64)->Value{
     for path in paths.into_iter().take(4){
         let result=(||->Result<(),String>{
             let file=File::open(&path).map_err(|e|e.to_string())?;
-            if file.metadata().map_err(|e|e.to_string())?.len()>FILE_LIMIT{clipped=true;}
-            let mut reader=BufReader::new(file.take(FILE_LIMIT));let mut discarding=false;
+            // Read a finite snapshot, even when a collector keeps appending.
+            let length=file.metadata().map_err(|e|e.to_string())?.len();
+            if length>FILE_LIMIT{clipped=true;}
+            let mut reader=BufReader::new(file.take(length.min(FILE_LIMIT)));let mut discarding=false;
             loop {
                 let mut line=Vec::new();
                 // Bound even a malformed single line, while continuing after its newline.

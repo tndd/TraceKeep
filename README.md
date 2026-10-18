@@ -139,6 +139,15 @@ Explicit `--mini` and `--full` still open those views. Windows may place the ico
 in the notification area's overflow menu. Login startup takes effect at the next
 sign-in; installation does not restart Windows or change the recorder.
 
+Run the installer from an ordinary Windows PowerShell, outside an MSIX-hosted
+terminal or agent. It checks the physical installation path and refuses AppData
+redirection before replacing the viewer or registering startup. Startup success
+also reports `windowsStartupRecognized` from Windows' startup inventory; a Run
+value visible only within the installer's own registry view is insufficient.
+`-ReplaceViewer` replaces only recognized TraceKeep GUI processes, preserving
+the independent recorder. The package includes the application icon for the
+Start-menu shortcut and uses the same icon for monitor windows.
+
 The compact temperature gauges use one uniform arc color that changes only with the current temperature, without colored scale ticks. Display anchors: CPU green through 70 °C, yellow at 85 °C, red at 95 °C; GPU green through 60 °C, yellow at 75 °C, red at 90 °C, with interpolation between anchors. These are visual conventions, not hardware protection limits or fault diagnoses. Both arc lengths use a 0–100 °C display scale, capped at the end while the number preserves higher valid readings. Missing/stale readings show an empty gray track.
 
 

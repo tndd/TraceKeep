@@ -81,6 +81,7 @@ fn show_view(app:&tauri::AppHandle,view:&str)->Result<(),String>{
     if let Some(window)=app.get_webview_window(label){window.unminimize().map_err(|e|e.to_string())?;window.show().map_err(|e|e.to_string())?;window.set_focus().map_err(|e|e.to_string())?;return Ok(());}
     let mut builder=tauri::WebviewWindowBuilder::new(app,label,tauri::WebviewUrl::App(url.into()))
         .title(title).visible(false).inner_size(width,height).min_inner_size(if view=="mini"{280.}else{720.},if view=="mini"{202.}else{600.});
+    if let Some(icon)=app.default_window_icon(){builder=builder.icon(icon.clone()).map_err(|e|e.to_string())?;}
     if view=="mini" {
         builder=builder.decorations(false);
         if let Ok(Some(monitor))=app.primary_monitor(){let scale=monitor.scale_factor();let pos=monitor.position();let size=monitor.size();

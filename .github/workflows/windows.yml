@@ -58,6 +58,8 @@ jobs:
         run: cargo +stable build --release --locked
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
+      - name: Desktop install and Windows startup recognition
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayInstall.ps1
       - name: Assemble CLI and optional GUI package
         shell: pwsh
         run: |
@@ -65,6 +67,7 @@ jobs:
           Copy-Item src-tauri/target/release/pcdiag.exe,src-tauri/target/release/pc-diagnostics.exe,src-tauri/Cargo.lock -Destination package
           Copy-Item management,collectors,docs -Destination package -Recurse
           Copy-Item scripts/Install-Tray.ps1 -Destination package
+          Copy-Item src-tauri/icons/icon.ico -Destination package/TraceKeep.ico
           Copy-Item README.md -Destination package
           Copy-Item (Join-Path $env:RUNNER_TEMP 'tray-icons') -Destination package/test-previews -Recurse
           $files = @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')

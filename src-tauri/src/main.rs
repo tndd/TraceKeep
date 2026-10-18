@@ -104,7 +104,7 @@ fn tray_icon(display:&tray_temperature::Display)->tauri::image::Image<'static>{
     });tauri::image::Image::new_owned(pixels,64,64)
 }
 fn main(){
-    let view=if std::env::args().any(|a|a=="--tray"){"tray"}else if std::env::args().any(|a|a=="--full"){"full"}else{"mini"};
+    let view=desktop::initial_view(std::env::args().skip(1));
     let Some(instance)=desktop::Instance::acquire(view).expect("Unable to register tray instance") else{return;};
     let sources=Sources::load().unwrap_or_default();
     let app=tauri::Builder::default().manage(Arc::new(Mutex::new(Monitor::new(sources)))).manage(Control::default())

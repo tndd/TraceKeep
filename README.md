@@ -129,6 +129,16 @@ When all windows are closed, only a bounded CPU log tail (256 KiB per read, one 
 
 TraceKeep is the product display name. Existing `pcdiag` commands, executable names, scheduled task and data paths remain compatible with previous installations.
 
+The desktop package's `Install-Tray.ps1 -Startup` installs the viewer as
+`%LOCALAPPDATA%\PCDiagnostics\viewer\TraceKeep.exe`, adds a TraceKeep Start-menu
+shortcut, and registers **TraceKeep** in the current user's Windows startup apps.
+It migrates the old PCDiagnosticsTray Run entry without adding a second startup
+mechanism. Ordinary launch and login launch start in the notification area with
+no monitor window; click the icon for the mini monitor or use its menu for details.
+Explicit `--mini` and `--full` still open those views. Windows may place the icon
+in the notification area's overflow menu. Login startup takes effect at the next
+sign-in; installation does not restart Windows or change the recorder.
+
 The compact temperature gauges use one uniform arc color that changes only with the current temperature, without colored scale ticks. Display anchors: CPU green through 70 °C, yellow at 85 °C, red at 95 °C; GPU green through 60 °C, yellow at 75 °C, red at 90 °C, with interpolation between anchors. These are visual conventions, not hardware protection limits or fault diagnoses. Both arc lengths use a 0–100 °C display scale, capped at the end while the number preserves higher valid readings. Missing/stale readings show an empty gray track.
 
 

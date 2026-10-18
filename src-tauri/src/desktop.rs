@@ -72,7 +72,7 @@ fn elevated_cli(args:&str)->Result<(),String>{
 }
 
 const RUN_KEY:&str="Software\\Microsoft\\Windows\\CurrentVersion\\Run";
-const RUN_VALUE:&str="PCDiagnosticsTray";
+const RUN_VALUE:&str="TraceKeep";
 pub fn startup_command(path:&Path)->Result<String,String>{
     let path=path.to_str().ok_or("Executable path is not Unicode")?;
     if path.contains('"')||path.contains('\n')||path.contains('\r'){return Err("Invalid executable path".into());}
@@ -99,15 +99,29 @@ pub fn set_startup(enabled:bool,executable:&Path)->Result<(),String>{
         if result!=ERROR_SUCCESS{return Err(format!("Startup registry open failed: {result}"));}
         let value=wide(&command);
         let result=if enabled {RegSetValueExW(key,wide(RUN_VALUE).as_ptr(),0,REG_SZ,value.as_ptr().cast(),(value.len()*2) as u32)}else{RegDeleteValueW(key,wide(RUN_VALUE).as_ptr())};
+        // Remove only our old registration, avoiding two launches at sign-in.
+        if result==ERROR_SUCCESS || (result==ERROR_FILE_NOT_FOUND&&!enabled) {
+            RegDeleteValueW(key,wide("PCDiagnosticsTray").as_ptr());
+        }
         RegCloseKey(key);
         if result!=ERROR_SUCCESS&&!(result==ERROR_FILE_NOT_FOUND&&!enabled){return Err(format!("Startup update failed: {result}"));}
     }Ok(())
 }
 pub fn viewer_path()->Result<PathBuf,String>{
+    let branded=crate::app_dir().join("viewer/TraceKeep.exe");
+    if branded.is_file(){return Ok(branded);}
     let local=crate::app_dir().join("viewer/pc-diagnostics.exe");
     if local.is_file(){return Ok(local);}
     let path=std::env::current_exe().map_err(|e|e.to_string())?.with_file_name("pc-diagnostics.exe");
     if path.is_file(){Ok(path)}else{Err("Optional viewer is not installed.".into())}
+}
+
+pub fn initial_view(args:impl IntoIterator<Item=String>)->&'static str {
+    let args:Vec<String>=args.into_iter().collect();
+    if args.iter().any(|a|a=="--tray"){"tray"}
+    else if args.iter().any(|a|a=="--full"){"full"}
+    else if args.iter().any(|a|a=="--mini"){"mini"}
+    else {"tray"}
 }
 pub fn launch(view:&str)->Result<(),String>{
     if !matches!(view,"tray"|"mini"|"full"){return Err("Unknown viewer mode".into());}
@@ -115,6 +129,11 @@ pub fn launch(view:&str)->Result<(),String>{
 }
 
 #[cfg(test)]mod tests{use super::*;
+    #[test]fn ordinary_and_login_launches_do_not_open_a_window(){
+        for args in [vec![],vec!["--tray"],vec!["--unknown"],vec!["--mini","--tray"]]{assert_eq!(initial_view(args.into_iter().map(String::from)),"tray");}
+        assert_eq!(initial_view(["--mini".to_owned()]),"mini");
+        assert_eq!(initial_view(["--full".to_owned()]),"full");
+    }
     #[test]fn commands_are_not_arbitrary(){assert!(validate_action("stop").is_ok());for a in ["upgrade","stop; whoami","restart",""]{assert!(validate_action(a).is_err());}}
     #[test]fn startup_quotes_paths_and_never_starts_recording(){let v=startup_command(Path::new("C:\\Apps With Space\\viewer.exe")).unwrap();assert_eq!(v,"\"C:\\Apps With Space\\viewer.exe\" --tray");assert!(startup_command(Path::new("bad\"path")).is_err());}
 }

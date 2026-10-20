@@ -12,7 +12,7 @@ $root=Join-Path $env:TEMP ('tracekeep-native-diagnostics-'+[guid]::NewGuid().ToS
 $logs=Join-Path $root 'logs';[void][IO.Directory]::CreateDirectory($logs)
 $settings=Join-Path $root 'active-collection-settings.json'
 $config=Get-CollectionDefaults
-foreach($name in @($config.modules.Keys)){$config.modules[$name].enabled=($name -in @('inventory','power','gpuDetails'))}
+foreach($name in @($config.modules.Keys)){$config.modules[$name].enabled=($name -in @('inventory','power','gpuDetails','crashConfiguration'))}
 Save-EvidenceJson $settings $config
 $settingsHash=(Get-FileHash $settings).Hash
 $start=[DateTimeOffset]::Now.AddSeconds(-1)
@@ -26,9 +26,17 @@ function Run([string]$module,[switch]$Failure){
         else{Assert ($p.ExitCode -eq 0) ('Native module failed: '+$module+' '+(Get-Content $stderr -Raw))}
     }finally{if(-not $p.HasExited){$p.Kill();$null=$p.WaitForExit(5000)};$p.Dispose()}
 }
-foreach($module in @('inventory','power','gpuDetails')){
+foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
     Run $module
     $row=Get-Content (Join-Path $logs ('detail-'+$module+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')) -Tail 1|ConvertFrom-Json
+    if($module -eq 'crashConfiguration'){
+        $snapshot=Get-Content (Join-Path $root 'crash-configuration.json') -Raw|ConvertFrom-Json
+        $reference=Get-CrashConfiguration $root
+        foreach($field in @('CrashDumpEnabled','DumpFile','MinidumpDir','AlwaysKeepMemoryDump','AutoReboot','LogEvent','DedicatedDumpFile','DumpFileSize')){Assert ($snapshot.settings.$field -eq $reference.settings.$field) ('Crash setting mismatch: '+$field)}
+        Assert ($snapshot.policy.status -eq $reference.policy.status) 'Crash policy status differs'
+        Assert ($snapshot.pagefiles.Count -eq $reference.pagefiles.Count -and $snapshot.volumes.Count -eq $reference.volumes.Count) 'Crash configuration source rows differ'
+        continue
+    }
     $reference=Get-ExtendedEvidence $module
     Assert ($row.status -eq $reference.status) ('Availability changed: '+$module+' '+($row.result.issues|ConvertTo-Json -Depth 8))
     if($module -eq 'inventory'){
@@ -84,14 +92,14 @@ Assert (-not(Test-Path $old) -and (Test-Path ($old+'.gz'))) 'Old log was not com
 Test-DiagnosticGzip ($old+'.gz') $oldHash
 Assert ((Get-Content ($old+'.gz.sha256') -Raw).Trim() -eq $oldHash) 'Compression receipt differs'
 Assert ((Get-FileHash $todayFile).Hash -eq $todayHash -and (Test-Path $yesterday)) 'Recent logs changed'
-foreach($module in @('inventory','power','gpuDetails','extended','maintenance')){
+foreach($module in @('inventory','power','gpuDetails','crashConfiguration','extended','maintenance')){
     $lockName=if($module -in @('extended','maintenance')){$module+'.owner.lock'}else{'module-'+$module+'.owner.lock'}
     $owner=[IO.FileStream]::new((Join-Path $logs $lockName),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
     try{Run $module -Failure}finally{$owner.Dispose()}
 }
-foreach($module in @('inventory','power','gpuDetails')){$config.modules[$module].enabled=$false}
+foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){$config.modules[$module].enabled=$false}
 Save-EvidenceJson $settings $config
-foreach($module in @('inventory','power','gpuDetails')){
+foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
     $path=Join-Path $logs ('detail-'+$module+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
     $hash=(Get-FileHash $path).Hash;Run $module
     Assert ((Get-FileHash $path).Hash -eq $hash) ('Disabled module changed log: '+$module)

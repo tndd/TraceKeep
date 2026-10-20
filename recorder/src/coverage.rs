@@ -56,7 +56,7 @@ pub fn collect(
                 state["time"].as_str().ok_or("Missing heartbeat time")?,
             )
             .map_err(|e| e.to_string())?;
-            let age = (now - time).num_milliseconds();
+            let age = now.signed_duration_since(time).num_milliseconds();
             if !(-5000..=45000).contains(&age) {
                 return Err("Module heartbeat is stale".into());
             }

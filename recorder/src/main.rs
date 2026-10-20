@@ -1,6 +1,7 @@
 mod collect;
 mod command;
 mod coverage;
+mod crash;
 mod diagnostics;
 mod inventory;
 mod maintenance;
@@ -170,6 +171,7 @@ impl Options {
             "reliability",
             "diskSpace",
             "inventory",
+            "crashConfiguration",
             "power",
             "gpuDetails",
             "extended",
@@ -204,7 +206,7 @@ fn interval(settings: &Value, module: &str) -> Result<Option<Duration>, String> 
     }
     let defaults = match module {
         "processes" => 30,
-        "reliability" | "power" => 300,
+        "reliability" | "power" | "crashConfiguration" => 300,
         "inventory" => 1800,
         "gpuDetails" => 60,
         "diskSpace" => 60,
@@ -275,6 +277,8 @@ fn record_loop(
         recorder.state(json!({"status":"collecting","startedAt":started,"sequence":sequence,"schedule":schedule}))?;
         // Provider calls run only here, never in the coordinator or another worker.
         let result = collect();
+        let crash_snapshot =
+            (options.module == "crashConfiguration").then(|| result["data"].clone());
         let status = result["status"].clone();
         let issues = result["issues"].clone();
         let duration = timer.elapsed().as_millis() as u64;
@@ -286,6 +290,16 @@ fn record_loop(
             &schedule,
             Local::now(),
         )?;
+        if let Some(crash) = crash_snapshot {
+            storage::snapshot(
+                &options
+                    .logs
+                    .parent()
+                    .unwrap()
+                    .join("crash-configuration.json"),
+                &crash,
+            )?;
+        }
         let completed = now();
         let (next, skipped) = advance(due, clock.elapsed(), interval);
         due = next;
@@ -343,6 +357,7 @@ fn run(options: &Options) -> Result<(), String> {
         "performance" => metrics.performance(),
         "power" => diagnostics::power(&mut metrics,&mut thermal),
         "gpuDetails" => diagnostics::gpu(),
+        "crashConfiguration" => crash::collect(data,&mut metrics),
         "inventory" => {
             let machine=metrics.machine();
             let saved=storage::snapshot(&data.join("machine-inventory.json"),&machine);

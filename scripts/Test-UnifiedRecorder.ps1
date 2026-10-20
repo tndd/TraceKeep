@@ -32,14 +32,14 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    $expectedRestarts=if($Native){8}else{18}
+    $expectedRestarts=if($Native){7}else{18}
     do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq $expectedRestarts}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     $failedRows=@(Get-Content (Join-Path $logRoot ('evidence-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
     if(-not $failedRows[-1].errors.Count){throw 'Error-before-exit restart regression fixture was not exercised'}
     if($Native){
         $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
-        if($nativeWorkers.Count -ne 10 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
+        if($nativeWorkers.Count -ne 11 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
         $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'module-performance'){$peerIds[$w.name]=$w.pid}
         $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-performance').pid
         $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()

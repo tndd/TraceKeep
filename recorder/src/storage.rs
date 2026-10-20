@@ -30,6 +30,7 @@ pub fn json_bytes(row: &Value) -> io::Result<Vec<u8>> {
         "DriverDate",
         "LastBootUpTime",
         "InstallDate",
+        "LastWriteTimeUtc",
     ] {
         text = escape_legacy_date(&text, field);
     }

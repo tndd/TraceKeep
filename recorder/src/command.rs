@@ -1,5 +1,5 @@
-//! Read-only helper execution. Suspend before assigning a kill-on-close job,
-//! then resume; timeout/output errors and worker death cannot orphan helpers.
+//! Read-only helpers enter a kill-on-close job atomically at process creation.
+//! Timeout/output errors and worker death cannot orphan helpers (Windows 10+).
 #[cfg(windows)]
 mod win {
     use std::{
@@ -182,12 +182,57 @@ mod win {
                 size_of_val(&limits) as u32,
             ))?;
         }
-        let mut startup: STARTUPINFOW = unsafe { std::mem::zeroed() };
-        startup.cb = size_of_val(&startup) as u32;
-        startup.dwFlags = STARTF_USESTDHANDLES;
-        startup.hStdInput = stdin_read.0;
-        startup.hStdOutput = stdout_write.0;
-        startup.hStdError = stderr_write.0;
+        let mut attribute_bytes = 0usize;
+        unsafe {
+            InitializeProcThreadAttributeList(null_mut(), 2, 0, &mut attribute_bytes);
+        }
+        let mut backing = vec![0usize; attribute_bytes.div_ceil(size_of::<usize>())];
+        let attributes = backing.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
+        unsafe {
+            check(InitializeProcThreadAttributeList(
+                attributes,
+                2,
+                0,
+                &mut attribute_bytes,
+            ))?;
+        }
+        struct Attributes(LPPROC_THREAD_ATTRIBUTE_LIST);
+        impl Drop for Attributes {
+            fn drop(&mut self) {
+                unsafe {
+                    DeleteProcThreadAttributeList(self.0);
+                }
+            }
+        }
+        let attributes = Attributes(attributes);
+        let handles = [stdin_read.0, stdout_write.0, stderr_write.0];
+        unsafe {
+            check(UpdateProcThreadAttribute(
+                attributes.0,
+                0,
+                PROC_THREAD_ATTRIBUTE_JOB_LIST as usize,
+                &job.0 as *const _ as _,
+                size_of::<HANDLE>(),
+                null_mut(),
+                null(),
+            ))?;
+            check(UpdateProcThreadAttribute(
+                attributes.0,
+                0,
+                PROC_THREAD_ATTRIBUTE_HANDLE_LIST as usize,
+                handles.as_ptr() as _,
+                size_of_val(&handles),
+                null_mut(),
+                null(),
+            ))?;
+        }
+        let mut startup: STARTUPINFOEXW = unsafe { std::mem::zeroed() };
+        startup.StartupInfo.cb = size_of_val(&startup) as u32;
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = stdin_read.0;
+        startup.StartupInfo.hStdOutput = stdout_write.0;
+        startup.StartupInfo.hStdError = stderr_write.0;
+        startup.lpAttributeList = attributes.0;
         let mut info: PROCESS_INFORMATION = unsafe { std::mem::zeroed() };
         unsafe {
             check(CreateProcessW(
@@ -196,26 +241,15 @@ mod win {
                 null(),
                 null(),
                 1,
-                CREATE_NO_WINDOW | CREATE_SUSPENDED,
+                CREATE_NO_WINDOW | EXTENDED_STARTUPINFO_PRESENT,
                 null(),
                 null(),
-                &startup,
+                &startup.StartupInfo,
                 &mut info,
             ))?;
         }
         let process = Handle::checked(info.hProcess)?;
         let thread = Handle::checked(info.hThread)?;
-        unsafe {
-            if AssignProcessToJobObject(job.0, process.0) == 0 {
-                let error = io::Error::last_os_error();
-                TerminateProcess(process.0, 1);
-                WaitForSingleObject(process.0, 5000);
-                return Err(error);
-            }
-            if ResumeThread(thread.0) == u32::MAX {
-                return Err(io::Error::last_os_error());
-            }
-        }
         drop(thread);
         drop(stdin_read);
         drop(stdout_write);

@@ -10,15 +10,64 @@ const OUTPUT_LIMIT:usize=32*1024*1024;
 const LINE_LIMIT:usize=8*1024*1024+2;
 const REFERENCE_LIMIT:usize=32*1024*1024;
 pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
+    query_view(sources,start,end,false)
+}
+pub fn query_workspace(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
+    query_view(sources,start,end,true)
+}
+fn query_view(sources:&Sources,start:&str,end:&str,workspace:bool)->Result<Value,String>{
     let a=DateTime::parse_from_rfc3339(start).map_err(|_|"Invalid start timestamp")?.timestamp_millis();
     let b=DateTime::parse_from_rfc3339(end).map_err(|_|"Invalid end timestamp")?.timestamp_millis();
     if b<=a||b-a>7_200_000{return Err("Select a positive range of at most two hours".into());}
     let mut streams=BTreeMap::new();
     for (key,prefix,sensor) in [("cpu","cpu-auto-",true),("board","board-auto-",true),("activity","activity-",false),("events","events-",false),("performance","detail-performance-",false),("processes","detail-processes-",false),("reliability","detail-reliability-",false),("diskSpace","detail-diskSpace-",false),("inventory","detail-inventory-",false),("power","detail-power-",false),("gpuDetails","detail-gpuDetails-",false),("storage","storage-",false),("configurationJournal","detail-configurationJournal-",false),("crashConfigurationHistory","detail-crashConfiguration-",false),("collectorHealth","extended-",false),("cpuProgress","progress-cpu-",true),("boardProgress","progress-board-",true),("activityProgress","progress-activity-",false)]{
-        streams.insert(key,read_stream(if sensor{&sources.sensor_root}else{&sources.activity_root},prefix,a,b));
+        if workspace && !matches!(key,"cpu"|"board"|"activity"|"events"|"performance"|"processes"|"gpuDetails"|"storage") {
+            streams.insert(key,json!({"rows":[],"projection":"not needed by workspace; full records available through pcdiag history"}));
+            continue;
+        }
+        let mut stream=read_stream(if sensor{&sources.sensor_root}else{&sources.activity_root},prefix,a,b);
+        if workspace { project_workspace(key,&mut stream); }
+        streams.insert(key,stream);
     }
     let read_json=|name:&str|fs::read(machine_dir().join(name)).ok().and_then(|x|serde_json::from_slice::<Value>(&x).ok()).unwrap_or(Value::Null);
     Ok(json!({"schemaVersion":1,"start":start,"end":end,"queriedAt":Utc::now().to_rfc3339(),"streams":streams,"settings":read_json("collection-settings.json"),"coverage":read_json("coverage.json"),"crashConfiguration":read_json("crash-configuration.json"),"sources":sources}))
+}
+// Presentation transport only. Files and the full CLI query remain unchanged.
+fn project_workspace(key:&str,stream:&mut Value){
+    let mut summary=Value::Null;
+    if let Some(rows)=stream["rows"].as_array_mut(){
+        let original=rows.len();
+        if key=="processes"{
+            rows.sort_by_key(|r|r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis()));
+            let times=rows.iter().filter_map(|r|r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis())).collect::<Vec<_>>();
+            summary=json!({"count":original,"first":rows.first().map(|r|&r["time"]),"last":rows.last().map(|r|&r["time"]),"maxGap":times.windows(2).map(|w|w[1]-w[0]).max().map(|n|n as f64/1000.)});
+        }
+        // A later failed GPU query must not hide the last successful XML sample.
+        if key=="gpuDetails"{rows.retain(|r|r["result"]["data"]["xml"].is_string());}
+        let before=rows.len();
+        let keep=match key{"processes"=>2,"gpuDetails"=>1,_=>original};
+        if before>keep {rows.drain(..before-keep);}
+        if matches!(key,"cpu"|"board") {
+            let mut catalog=Vec::new();let mut indices=BTreeMap::new();
+            for row in rows.iter_mut(){
+                if let Some(sensors)=row["sensors"].as_array_mut(){
+                    for sensor in sensors {
+                        let mut metadata=sensor.clone();
+                        if let Some(object)=metadata.as_object_mut(){object.remove("value");}else{continue;}
+                        let identity=metadata.to_string();
+                        let index=*indices.entry(identity).or_insert_with(||{let index=catalog.len();catalog.push(metadata);index});
+                        *sensor=json!([index,sensor["value"]]);
+                    }
+                }
+            }
+            stream["sensorCatalog"]=json!(catalog);
+            stream["sensorEncoding"]=json!("catalog-v1");
+        }
+        stream["availableRows"]=json!(original);
+        stream["returnedRows"]=json!(before.min(keep));
+        stream["projection"]=json!("workspace-v1");
+    }
+    if !summary.is_null(){stream["sampleSummary"]=summary;}
 }
 fn compact(prefix:&str,mut row:Value)->Value{
     if prefix=="events-" && row["provider"].as_str().is_some_and(|p|p.contains("PowerShell")) {row["xml"]=Value::Null;row["xmlOmitted"]=json!("High-volume PowerShell content omitted from view; retained in original log");}
@@ -86,6 +135,21 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  use super::*;
  use std::io::Write;
  use flate2::{write::GzEncoder,Compression};
+ #[test]fn workspace_projection_preserves_sensor_identity_and_process_coverage(){
+  let sensors=json!([{"id":"same","name":"Temperature","hardware":"synthetic","type":"Temperature","value":60,"available":true},{"id":"same","name":"Temperature","hardware":"other","type":"Temperature","value":null,"available":false}]);
+  let mut stream=json!({"rows":[{"time":"2026-01-01T00:00:00Z","sensors":sensors},{"time":"2026-01-01T00:00:01Z","sensors":sensors}],"truncated":true,"invalidLines":2});
+  let original=stream.clone();project_workspace("cpu",&mut stream);
+  assert_eq!(stream["sensorCatalog"].as_array().unwrap().len(),2);
+  let mut restored=stream["rows"].clone();
+  for row in restored.as_array_mut().unwrap(){for cell in row["sensors"].as_array_mut().unwrap(){let mut sensor=stream["sensorCatalog"][cell[0].as_u64().unwrap() as usize].clone();sensor["value"]=cell[1].clone();*cell=sensor;}}
+  assert_eq!(restored,original["rows"]);assert_eq!(stream["truncated"],true);assert_eq!(stream["invalidLines"],2);
+  let mut process=json!({"rows":[{"time":"2026-01-01T00:00:00Z","sequence":0},{"time":"2026-01-01T00:00:30Z","sequence":1},{"time":"2026-01-01T00:02:00Z","sequence":2}]});
+  project_workspace("processes",&mut process);
+  assert_eq!(process["returnedRows"],2);assert_eq!(process["rows"][0]["sequence"],1);
+  assert_eq!(process["sampleSummary"]["count"],3);assert_eq!(process["sampleSummary"]["maxGap"],90.);
+  let mut gpu=json!({"rows":[{"result":{"data":{"xml":"<synthetic/>"}}},{"result":{"status":"unavailable"}}]});
+  project_workspace("gpuDetails",&mut gpu);assert_eq!(gpu["rows"][0]["result"]["data"]["xml"],"<synthetic/>");
+ }
  fn gzip(path:&Path,bytes:&[u8]) {
   let mut encoder=GzEncoder::new(fs::File::create(path).unwrap(),Compression::default());
   encoder.write_all(bytes).unwrap();encoder.finish().unwrap();

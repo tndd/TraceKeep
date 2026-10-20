@@ -35,9 +35,10 @@ function Record-Controller($value) {
 function Launch-Worker($w) {
     $native=Join-Path $codeRoot 'tracekeep-worker.exe'
     $w.backend='powershell'
-    $nativeModule=if($w.name -in @('extended','maintenance')){$w.name}else{$w.module}
-    if($nativeModule -in @('configurationJournal','processes','performance','reliability','diskSpace','inventory','power','gpuDetails','crashConfiguration','extended','maintenance') -and (Test-Path -LiteralPath $native)){
+    $nativeModule=if($w.name -in @('activity','extended','maintenance')){$w.name}else{$w.module}
+    if($nativeModule -in @('activity','configurationJournal','processes','performance','reliability','diskSpace','inventory','power','gpuDetails','crashConfiguration','extended','maintenance') -and (Test-Path -LiteralPath $native)){
         $args='--log-root "'+$logRoot+'" --settings "'+$activeSettings+'" --module '+$nativeModule+' --run-id "'+$runId+'"'
+        if($nativeModule -eq 'activity'){$args+=' --interval-ms '+$intervals.activity}
         $w.process=Start-Process -FilePath $native -ArgumentList $args -WindowStyle Hidden -PassThru
         $w.backend='rust'
     }else{

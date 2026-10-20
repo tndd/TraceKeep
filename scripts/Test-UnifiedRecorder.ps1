@@ -32,7 +32,7 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    $expectedRestarts=if($Native){7}else{18}
+    $expectedRestarts=if($Native){6}else{18}
     do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq $expectedRestarts}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     $failedRows=@(Get-Content (Join-Path $logRoot ('evidence-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
@@ -44,7 +44,7 @@ try {
         do {
             $state=Get-Content $runtimePath -Raw|ConvertFrom-Json
             $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
-            $ready=$nativeWorkers.Count -eq 11 -and @($nativeWorkers|Where-Object state -NE 'recording').Count -eq 0
+            $ready=$nativeWorkers.Count -eq 12 -and @($nativeWorkers|Where-Object state -NE 'recording').Count -eq 0
             if(-not $ready){Start-Sleep -Milliseconds 500}
         }while(-not $ready -and (Get-Date) -lt $deadline)
         if(-not $ready){throw ('Rust workers were not selected and recording: '+($nativeWorkers|ConvertTo-Json -Compress))}

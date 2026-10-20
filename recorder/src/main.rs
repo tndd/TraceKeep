@@ -5,7 +5,7 @@ use chrono::{Local, SecondsFormat};
 use serde_json::{json, Value};
 use std::{
     fs, io,
-    path::{Path, PathBuf},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -93,7 +93,7 @@ impl Recorder {
         at: chrono::DateTime<Local>,
     ) -> io::Result<()> {
         let date = at.format("%Y%m%d").to_string();
-        let hash = storage::sha(&serde_json::to_vec(&result)?);
+        let hash = storage::sha(&storage::json_bytes(&result)?);
         let unchanged = self
             .baseline
             .as_ref()

@@ -19,6 +19,34 @@ pub fn sha(bytes: &[u8]) -> String {
     format!("{:X}", Sha256::digest(bytes))
 }
 
+pub fn json_bytes(row: &Value) -> io::Result<Vec<u8>> {
+    // Windows PowerShell recognizes legacy CreationDate values as DateTime only
+    // with escaped slashes. Do not coerce unrelated strings that resemble dates.
+    let text = serde_json::to_string(row)?;
+    let marker = "\"CreationDate\":\"/Date(";
+    let mut output = String::with_capacity(text.len());
+    let mut offset = 0;
+    while let Some(index) = text[offset..].find(marker) {
+        let start = offset + index;
+        output.push_str(&text[offset..start]);
+        let number = start + marker.len();
+        if let Some(end) = text[number..].find(")/\"") {
+            let end = number + end;
+            if text[number..end].parse::<i64>().is_ok() {
+                output.push_str("\"CreationDate\":\"\\/Date(");
+                output.push_str(&text[number..end]);
+                output.push_str(")\\/\"");
+                offset = end + 3;
+                continue;
+            }
+        }
+        output.push_str(marker);
+        offset = number;
+    }
+    output.push_str(&text[offset..]);
+    Ok(output.into_bytes())
+}
+
 pub fn exclusive(path: &Path) -> io::Result<File> {
     let mut options = OpenOptions::new();
     options.read(true).write(true).create(true).truncate(false);
@@ -92,7 +120,7 @@ fn restore(path: &Path) -> io::Result<()> {
 }
 
 pub fn append(path: &Path, row: &Value) -> io::Result<u64> {
-    let bytes = serde_json::to_vec(row)?;
+    let bytes = json_bytes(row)?;
     if bytes.len() > 8 * 1024 * 1024 {
         return Err(io::Error::other("record exceeds 8 MiB"));
     }
@@ -121,7 +149,7 @@ pub fn append(path: &Path, row: &Value) -> io::Result<u64> {
 pub fn snapshot(path: &Path, row: &Value) -> io::Result<()> {
     let temp = suffix(path, ".tmp");
     let mut file = File::create(&temp)?;
-    serde_json::to_writer(&mut file, row)?;
+    file.write_all(&json_bytes(row)?)?;
     file.sync_all()?;
     drop(file);
     #[cfg(windows)]
@@ -226,5 +254,17 @@ mod tests {
             1
         );
         assert!(read_shared(&path, 1).is_err());
+    }
+    #[test]
+    fn legacy_dates_keep_powershell_datetime_decoding_without_changing_json_values() {
+        let row = json!({"CreationDate":"/Date(123)/","raw":"{\"path\":\"a/b\"}","ordinary":"/Date(456)/"});
+        let bytes = json_bytes(&row).unwrap();
+        assert!(String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains(r"\/Date(123)\/"));
+        assert!(String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains(r#""ordinary":"/Date(456)/""#));
+        assert_eq!(serde_json::from_slice::<Value>(&bytes).unwrap(), row);
     }
 }

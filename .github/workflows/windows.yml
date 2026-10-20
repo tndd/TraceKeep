@@ -29,6 +29,13 @@ jobs:
         run: |
           cargo +stable test --locked
           cargo +stable build --release --locked
+      - name: Retain native worker for isolated validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracekeep-worker-validation
+          path: recorder/target/release/tracekeep-worker.exe
+          retention-days: 7
+          if-no-files-found: error
       - name: Visualization data integrity
         run: node --test scripts/Test-Visualizations.cjs
       - name: Mini monitor state integrity

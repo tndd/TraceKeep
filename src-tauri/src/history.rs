@@ -9,6 +9,23 @@ const OUTPUT_LIMIT:usize=32*1024*1024;
 // Native writers accept 8 MiB JSON; allow the legacy CRLF terminator as well.
 const LINE_LIMIT:usize=8*1024*1024+2;
 const REFERENCE_LIMIT:usize=32*1024*1024;
+// Validate the whole JSON document, but borrow only the selection/reference
+// header. Old sensor samples need no allocated sensor tree. Reference-bearing
+// rows must still be read in full, including baselines before the query range.
+#[derive(serde::Deserialize)]
+struct Selection<'a>{
+    #[serde(borrow)]
+    time:Option<&'a str>,
+    #[serde(borrow)]
+    sha256:Option<&'a str>,
+}
+fn outside_without_reference(line:&[u8],a:i64,b:i64)->bool{
+    serde_json::from_slice::<Selection<'_>>(line).ok().is_some_and(|header|{
+        header.sha256.is_none() && header.time.and_then(|t|DateTime::parse_from_rfc3339(t).ok()).is_some_and(|t|{
+            let time=t.timestamp_millis();time<a||time>=b
+        })
+    })
+}
 pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
     query_view(sources,start,end,false)
 }
@@ -112,6 +129,9 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
                 if discarding{discarding=false;continue;}
                 if line.iter().all(u8::is_ascii_whitespace){continue;}
                 let line=line.strip_prefix(&[239,187,191]).unwrap_or(&line);
+                // Small rows are cheaper to parse once. Invalid headers fall
+                // through to the original parser and its diagnostics.
+                if line.len()>512 && outside_without_reference(line,a,b){continue;}
                 let mut r=match serde_json::from_slice::<Value>(line){Ok(r)=>r,Err(_)=>{invalid+=1;continue;}};
                 if let Some(hash)=r["sha256"].as_str().map(str::to_owned){
                     if !r["result"].is_null(){remember(&mut cache,&mut cache_bytes,hash,&r["result"],REFERENCE_LIMIT);}
@@ -137,6 +157,15 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  use super::*;
  use std::io::Write;
  use flate2::{write::GzEncoder,Compression};
+ #[test]fn range_fast_path_keeps_reference_baselines_and_malformed_diagnostics(){
+  let a=DateTime::parse_from_rfc3339("2026-01-01T01:00:00Z").unwrap().timestamp_millis();let b=a+60_000;
+  let old=json!({"time":"2026-01-01T00:00:00Z","sensors":[{"value":42,"padding":"x".repeat(1024)}]}).to_string();
+  assert!(outside_without_reference(old.as_bytes(),a,b));
+  assert!(!outside_without_reference(old.replace("\"sensors\":","\"sha256\":\"baseline\",\"sensors\":").as_bytes(),a,b));
+  assert!(!outside_without_reference(old.replace("00:00:00Z","01:00:00Z").as_bytes(),a,b));
+  assert!(!outside_without_reference(&old.as_bytes()[..old.len()-1],a,b));
+  assert!(!outside_without_reference(old.replace("00:00:00Z","not-a-time").as_bytes(),a,b));
+ }
  #[test]fn workspace_projection_preserves_sensor_identity_and_process_coverage(){
   let sensors=json!([{"id":"same","name":"Temperature","hardware":"synthetic","type":"Temperature","value":60,"available":true},{"id":"same","name":"Temperature","hardware":"other","type":"Temperature","value":null,"available":false},{"name":"missing-value","type":"Temperature"}]);
   let mut stream=json!({"rows":[{"time":"2026-01-01T00:00:00Z","sensors":sensors},{"time":"2026-01-01T00:00:01Z","sensors":sensors}],"truncated":true,"invalidLines":2});

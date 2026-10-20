@@ -1,5 +1,6 @@
 param([int]$MaxSamples = 0, [string]$LogRoot, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Log-Storage.ps1')
 . (Join-Path $PSScriptRoot 'Read-NvidiaDiagnostics.ps1')
 $root = $LogRoot
 if (-not $root) { $root = Join-Path $PSScriptRoot 'sensor-logs' }
@@ -15,16 +16,13 @@ function Write-DurableLine([string]$kind, [string]$line) {
     $key = "$kind-$day"
     if (-not $writers.ContainsKey($key)) {
         foreach ($old in @($writers.Keys | Where-Object { $_ -like "$kind-*" })) {
-            $writers[$old].Dispose()
+            Close-DiagnosticLogWriter $writers[$old]
             $writers.Remove($old)
         }
         $path = Join-Path $root "$key.jsonl"
-        $stream = [IO.FileStream]::new($path, [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
-        $writers[$key] = [IO.StreamWriter]::new($stream, $utf8)
+        $writers[$key] = Open-DiagnosticLogWriter $path
     }
-    $writers[$key].WriteLine($line)
-    $writers[$key].Flush()
-    $writers[$key].BaseStream.Flush($true)
+    Write-DiagnosticLogLine $writers[$key] $line
 }
 function Write-Record([string]$kind, $record) {
     Write-DurableLine $kind ($record | ConvertTo-Json -Compress -Depth 8)
@@ -88,7 +86,7 @@ try {
     try { Write-Record 'errors' @{time=[DateTimeOffset]::Now.ToString('o'); error=$_.Exception.ToString()} } catch {}
     exit 1
 } finally {
-    foreach ($writer in $writers.Values) { $writer.Dispose() }
+    foreach ($writer in $writers.Values) { Close-DiagnosticLogWriter $writer }
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
     if ($legacyLocked) { $legacyMutex.ReleaseMutex() }

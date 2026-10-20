@@ -1,5 +1,6 @@
 $script:EvidenceUtf8=[Text.UTF8Encoding]::new($false)
 $script:EvidenceCollectorDirectory=$PSScriptRoot
+. (Join-Path $PSScriptRoot 'Log-Storage.ps1')
 function Test-EvidenceReady($row,[DateTimeOffset]$since) {
     return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and ($row.eventsStatus -eq 'disabled' -or @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0)
 }
@@ -11,11 +12,10 @@ function Save-EvidenceJson($path,$value) {
     try {$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
     if(Test-Path -LiteralPath $path){[IO.File]::Replace($temp,$path,$path+'.previous')}else{[IO.File]::Move($temp,$path)}
 }
-function Add-EvidenceRecord($root,$kind,$value) {
-    $path=Join-Path $root ($kind+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
-    $stream=[IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite,4096,[IO.FileOptions]::WriteThrough)
-    $writer=[IO.StreamWriter]::new($stream,$script:EvidenceUtf8)
-    try {$writer.WriteLine(($value|ConvertTo-Json -Compress -Depth 12));$writer.Flush();$stream.Flush($true)}finally{$writer.Dispose()}
+function Add-EvidenceRecord($root,$kind,$value,[string]$Day=(Get-Date -Format yyyyMMdd)) {
+    $path=Join-Path $root ($kind+'-'+$Day+'.jsonl')
+    $handle=Open-DiagnosticLogWriter $path
+    try {Write-DiagnosticLogLine $handle ($value|ConvertTo-Json -Compress -Depth 12)}finally{Close-DiagnosticLogWriter $handle}
 }
 function Get-EvidenceCursor($stateRoot,$channel) {
     $key=$channel -replace '[^A-Za-z0-9_-]','_'
@@ -67,20 +67,14 @@ function Sync-EvidenceChannel($logRoot,$stateRoot,$channel) {
     return @{channel=$channel;recovered=$batch.Count;watermark=$watermark;backlog=($batch.Count -eq 2000)}
 }
 function Copy-EvidenceTail($source,$destination,[long]$maxBytes=8MB) {
-    # Read only the last bounded byte range, including files still being appended.
-    $stream=[IO.FileStream]::new($source,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite)
-    try {
-        $length=$stream.Length;$start=[Math]::Max(0,$length-$maxBytes)
-        [void]$stream.Seek($start,[IO.SeekOrigin]::Begin)
-        $reader=[IO.StreamReader]::new($stream,$script:EvidenceUtf8,$true,4096,$true)
-        try {if($start -gt 0){$null=$reader.ReadLine()};$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
-        # A final incomplete JSONL row is omitted; the original remains intact.
-        $lastNewline=$text.LastIndexOf("`n")
-        $text=if($lastNewline -ge 0){$text.Substring(0,$lastNewline+1)}else{''}
-        $output=[IO.FileStream]::new($destination,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
-        try {$bytes=$script:EvidenceUtf8.GetBytes($text);$output.Write($bytes,0,$bytes.Length);$output.Flush($true)}finally{$output.Dispose()}
-        return @{source=$source;sourceBytes=$length;copiedBytes=(Get-Item -LiteralPath $destination).Length;tailLimited=($start -gt 0);sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
-    }finally{$stream.Dispose()}
+    # Gzip is streamed through a bounded ring; incident bundles remain plain JSONL.
+    $tail=Read-DiagnosticLogTail $source ([int]$maxBytes)
+    $bytes=$tail.bytes;$start=0;$end=$bytes.Length
+    if($tail.length -gt $maxBytes){while($start -lt $end -and $bytes[$start] -ne 10){$start++};$start=[Math]::Min($end,$start+1)}
+    while($end -gt $start -and $bytes[$end-1] -ne 10){$end--}
+    $output=[IO.FileStream]::new($destination,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+    try {$output.Write($bytes,$start,$end-$start);$output.Flush($true)}finally{$output.Dispose()}
+    return @{source=$tail.path;sourceBytes=$tail.length;copiedBytes=(Get-Item -LiteralPath $destination).Length;tailLimited=($tail.length -gt $maxBytes);sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
 }
 function Get-CrashConfiguration {
     $errors=@();$settings=$null;$os=$null;$pagefiles=@();$dumps=@();$volumes=@()
@@ -147,9 +141,9 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     Save-EvidenceJson (Join-Path $dest 'crash-configuration.json') $crash
     foreach($name in @('machine-inventory.json','recorder-settings.json')){if(Test-Path -LiteralPath (Join-Path $dataRoot $name)){Copy-Item -LiteralPath (Join-Path $dataRoot $name) -Destination (Join-Path $dest $name) -Force}}
     Save-EvidenceJson (Join-Path $dest 'boot-events.json') @($events|ForEach-Object {@{time=$_.TimeCreated.ToString('o');channel='System';recordId=$_.RecordId;provider=$_.ProviderName;id=$_.Id;xml=$_.ToXml()}})
-    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-')){
-        foreach($file in @(Get-ChildItem -LiteralPath $logRoot -Filter ($prefix+'*.jsonl')|Sort-Object Name -Descending|Select-Object -First 2)){
-            try {$copied+=Copy-EvidenceTail $file.FullName (Join-Path $dest $file.Name)}catch{$errors+=$_.Exception.Message}
+    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','maintenance-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-')){
+        foreach($file in @(Get-DiagnosticDailyLogs $logRoot $prefix|Sort-Object Name -Descending|Select-Object -First 2)){
+            try {$copied+=Copy-EvidenceTail $file.FullName (Join-Path $dest ($file.Name -replace '\.gz$',''))}catch{$errors+=$_.Exception.Message}
         }
     }
     Save-EvidenceJson (Join-Path $dest 'manifest.json') @{version=1;createdAt=[DateTimeOffset]::Now.ToString('o');bootTime=([DateTimeOffset]$bootTime).ToString('o');classification=if($abnormal.Count){'abnormal-boot-evidence'}else{'boot-snapshot-unclassified'};abnormalEventCount=$abnormal.Count;files=$copied;errors=$errors;limits='Last two log dates per stream; last 8 MiB per file, final partial row omitted. Event lookback 3 days, maximum 5000. Dumps indexed only. Missing events do not prove a clean shutdown.'}

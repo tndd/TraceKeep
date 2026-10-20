@@ -6,12 +6,13 @@ $logRoot=Join-Path $dataRoot 'logs'
 $utf8=[Text.UTF8Encoding]::new($false)
 foreach($dir in @('management','collectors','data\logs')){[void][IO.Directory]::CreateDirectory((Join-Path $testRoot $dir))}
 Copy-Item (Join-Path $repo 'collectors\Collection-Settings.ps1') (Join-Path $testRoot 'collectors\Collection-Settings.ps1')
+Copy-Item (Join-Path $repo 'collectors\Log-Storage.ps1') (Join-Path $testRoot 'collectors\Log-Storage.ps1')
 $codeRoot=$testRoot
 # Isolate the test's mutex. Never run a hardware collector in this test.
 $source=Get-Content (Join-Path $repo 'management\Run-Recorder.ps1') -Raw
 $source=$source.Replace('Global\PCDiagnostics-Coordinator-v1',('Local\PCDiagnostics-Test-'+[guid]::NewGuid().ToString('N')))
 [IO.File]::WriteAllText((Join-Path $testRoot 'management\Run-Recorder.ps1'),$source,$utf8)
-foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-MotherboardLogging.ps1','board-auto'),@('Start-ContinuousDiagnostics.ps1','activity'),@('Start-EvidenceLogging.ps1','evidence'),@('Start-ExtendedLogging.ps1','extended'))){
+foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-MotherboardLogging.ps1','board-auto'),@('Start-ContinuousDiagnostics.ps1','activity'),@('Start-EvidenceLogging.ps1','evidence'),@('Start-ExtendedLogging.ps1','extended'),@('Start-LogMaintenance.ps1','maintenance'))){
     $fake=@'
 param([string]$LogRoot,[string]$LibraryDirectory,[int]$IntervalMilliseconds)
 $path=Join-Path $LogRoot ('PREFIX-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
@@ -26,7 +27,7 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 5}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
+    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 6}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     [IO.File]::WriteAllText((Join-Path $dataRoot 'STOP-ALL'),'test stop',$utf8)
     if(-not $proc.WaitForExit(15000)){throw 'Supervisor did not stop'}

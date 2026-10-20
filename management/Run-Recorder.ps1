@@ -9,6 +9,7 @@ $locked=$false
 $workers=@{}
 $utf8=[Text.UTF8Encoding]::new($false)
 . (Join-Path $codeRoot 'collectors\Collection-Settings.ps1')
+. (Join-Path $codeRoot 'collectors\Log-Storage.ps1')
 $collection=Get-CollectionSettings $DataRoot
 $intervals=@{cpu=2000;board=2000;activity=2000}
 $configuration=Join-Path $DataRoot 'recorder-settings.json'
@@ -26,9 +27,8 @@ if(Test-Path (Join-Path $DataRoot 'collection-settings.json')){foreach($name in 
 function Record-Controller($value) {
     $value.time=[DateTimeOffset]::Now.ToString('o')
     $path=Join-Path $logRoot ('coordinator-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
-    $file=[IO.FileStream]::new($path,[IO.FileMode]::Append,[IO.FileAccess]::Write,[IO.FileShare]::ReadWrite,4096,[IO.FileOptions]::WriteThrough)
-    $writer=[IO.StreamWriter]::new($file,$utf8)
-    try {$writer.WriteLine(($value|ConvertTo-Json -Compress -Depth 5));$writer.Flush();$file.Flush($true)} finally {$writer.Dispose()}
+    $handle=Open-DiagnosticLogWriter $path
+    try {Write-DiagnosticLogLine $handle ($value|ConvertTo-Json -Compress -Depth 5)}finally{Close-DiagnosticLogWriter $handle}
 }
 function Launch-Worker($w) {
     $args='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$w.script+'" -LogRoot "'+$logRoot+'"'
@@ -44,10 +44,10 @@ try {
     try {$locked=$mutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$locked=$true}
     if(-not $locked){exit 0}
     if(Test-Path (Join-Path $DataRoot 'STOP-ALL')){exit 0}
-    foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED')){$path=Join-Path $logRoot $marker;if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
-    foreach($entry in @(@('cpu','Start-AutomaticCpuLogging.ps1','cpu-auto-'),@('board','Start-MotherboardLogging.ps1','board-auto-'),@('activity','Start-ContinuousDiagnostics.ps1','activity-'),@('evidence','Start-EvidenceLogging.ps1','evidence-'),@('extended','Start-ExtendedLogging.ps1','extended-'))){
+    foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED','STOP-MAINTENANCE')){$path=Join-Path $logRoot $marker;if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
+    foreach($entry in @(@('cpu','Start-AutomaticCpuLogging.ps1','cpu-auto-'),@('board','Start-MotherboardLogging.ps1','board-auto-'),@('activity','Start-ContinuousDiagnostics.ps1','activity-'),@('evidence','Start-EvidenceLogging.ps1','evidence-'),@('extended','Start-ExtendedLogging.ps1','extended-'),@('maintenance','Start-LogMaintenance.ps1','maintenance-'))){
         $workers[$entry[0]]=@{name=$entry[0];script=(Join-Path $codeRoot ('collectors\'+$entry[1]));prefix=$entry[2];process=$null;started=[DateTimeOffset]::Now;restarts=@();retryAt=[DateTimeOffset]::Now;state='starting'}
-        $workers[$entry[0]].enabled=($entry[0] -in @('evidence','extended') -or $collection.modules[$entry[0]].enabled)
+        $workers[$entry[0]].enabled=($entry[0] -in @('evidence','extended','maintenance') -or $collection.modules[$entry[0]].enabled)
         if($workers[$entry[0]].enabled){Launch-Worker $workers[$entry[0]]}else{$workers[$entry[0]].state='disabled';$workers[$entry[0]].errorCount=0}
     }
     while(-not (Test-Path (Join-Path $DataRoot 'STOP-ALL'))){
@@ -58,7 +58,7 @@ try {
             $age=if($file){($now.UtcDateTime-$file.LastWriteTimeUtc).TotalSeconds}else{$null}
             $elapsed=($now-$w.started).TotalSeconds
             $alive=$w.process -and -not $w.process.HasExited
-            $freshLimit=if($w.name -eq 'extended'){90}elseif($w.name -eq 'evidence'){45}else{[Math]::Max(10,$intervals[$w.name]/1000+5)}
+            $freshLimit=if($w.name -in @('extended','maintenance')){90}elseif($w.name -eq 'evidence'){45}else{[Math]::Max(10,$intervals[$w.name]/1000+5)}
             $stallLimit=[Math]::Max(120,3*$freshLimit)
             $stalled=$alive -and $elapsed -gt $stallLimit -and ($null -eq $age -or $age -gt $stallLimit)
             if($stalled){Record-Controller @{event='worker-stalled';worker=$w.name;pid=$w.process.Id;logAgeSeconds=$age};$w.process.Kill();$null=$w.process.WaitForExit(5000);$alive=-not $w.process.HasExited}
@@ -69,7 +69,7 @@ try {
                 elseif($now -ge $w.retryAt){$w.restarts+=,$now;if($w.process){$w.process.Dispose()};Launch-Worker $w}
             } else {$w.state=if($null -ne $age -and $age -le $freshLimit){'recording'}else{'waiting-for-samples'}}
             $w.errorCount=0
-            if($w.name -in @('evidence','extended') -and $file){
+            if($w.name -in @('evidence','extended','maintenance') -and $file){
                 try {$row=Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
             }
         }
@@ -82,7 +82,7 @@ try {
     }
 } finally {
     if($locked){
-        foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED')){[IO.File]::WriteAllText((Join-Path $logRoot $marker),'coordinator stop',$utf8)}
+        foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED','STOP-MAINTENANCE')){[IO.File]::WriteAllText((Join-Path $logRoot $marker),'coordinator stop',$utf8)}
         foreach($w in $workers.Values){if($w.process){if(-not $w.process.HasExited -and -not $w.process.WaitForExit(5000)){$w.process.Kill();$null=$w.process.WaitForExit(5000)};$w.process.Dispose()}}
         Record-Controller @{event='coordinator-stopped'}
         $mutex.ReleaseMutex()

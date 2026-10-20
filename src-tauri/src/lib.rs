@@ -8,6 +8,7 @@ const HISTORY: usize = 450;
 
 pub mod recorder_status;
 pub mod history;
+pub mod log_files;
 #[cfg(windows)]
 pub mod desktop;
 #[cfg(windows)]

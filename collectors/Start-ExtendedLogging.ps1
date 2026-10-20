@@ -22,12 +22,7 @@ try {
             Add-EvidenceRecord $LogRoot 'extended' @{time=$started.ToString('o');event='heartbeat';activeModule=$name;modules=$state;errors=@()}
             try {
                 $result=if($name -in @('dumpArchive','werArchive')){Get-ArchiveEvidence $name $dataRoot $config.limits}elseif($name -eq 'diskSpace'){Get-LogSpaceEvidence $dataRoot $config.limits}else{Get-ExtendedEvidence $name}
-                $json=$result|ConvertTo-Json -Depth 12 -Compress
-                $sha=[Security.Cryptography.SHA256]::Create();try {$hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($json)))).Replace('-','')}finally{$sha.Dispose()}
-                $unchanged=$hashes[$name] -eq $hash
-                $record=@{time=[DateTimeOffset]::Now.ToString('o');startedAt=$started.ToString('o');monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;module=$name;durationMs=$timer.ElapsedMilliseconds;status=$result.status;sha256=$hash;unchanged=$unchanged}
-                if(-not $unchanged){$record.result=$result;$hashes[$name]=$hash}
-                Add-EvidenceRecord $LogRoot ('detail-'+$name) $record
+                $record=Add-ExtendedResult $LogRoot $name $result $hashes $started $timer.ElapsedMilliseconds
                 $state[$name]=@{status=$result.status;enabled=$true;time=$record.time;durationMs=$timer.ElapsedMilliseconds;issues=$result.issues}
             }catch{$state[$name]=@{status='error';enabled=$true;time=[DateTimeOffset]::Now.ToString('o');error=$_.Exception.Message};Add-EvidenceRecord $LogRoot ('detail-'+$name) $state[$name]}
             $next[$name]=[DateTimeOffset]::Now.AddSeconds($config.modules[$name].intervalSeconds)

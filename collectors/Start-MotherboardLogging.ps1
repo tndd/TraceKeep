@@ -1,5 +1,6 @@
 param([int]$MaxSamples = 0, [string]$LogRoot, [string]$LibraryDirectory, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Log-Storage.ps1')
 if (-not $LogRoot) { $LogRoot = Join-Path $PSScriptRoot 'sensor-logs' }
 if (-not $LibraryDirectory) { $LibraryDirectory = Join-Path $PSScriptRoot 'library' }
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -55,17 +56,15 @@ try {
         }
         $today = Get-Date -Format 'yyyyMMdd'
         if ($today -ne $day) {
-            if ($writer) { $writer.Dispose() }
-            $stream = [IO.FileStream]::new((Join-Path $LogRoot "board-auto-$today.jsonl"), [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
-            $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+            Close-DiagnosticLogWriter $writer
+            $writer = $null
+            $writer = Open-DiagnosticLogWriter (Join-Path $LogRoot "board-auto-$today.jsonl")
             $day = $today
         }
         $record.monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp()
         $record.monotonicFrequency=[Diagnostics.Stopwatch]::Frequency
         $record.intervalMilliseconds=$IntervalMilliseconds
-        $writer.WriteLine(($record | ConvertTo-Json -Depth 6 -Compress))
-        $writer.Flush()
-        $writer.BaseStream.Flush($true)
+        Write-DiagnosticLogLine $writer ($record | ConvertTo-Json -Depth 6 -Compress)
         $sequence++
         if ($MaxSamples -gt 0 -and $sequence -ge $MaxSamples) { break }
         Start-Sleep -Milliseconds ([Math]::Max(1, $IntervalMilliseconds - [int]$timer.ElapsedMilliseconds))
@@ -75,7 +74,7 @@ try {
     Write-Error $_ -ErrorAction Continue
     exit 1
 } finally {
-    if ($writer) { $writer.Dispose() }
+    Close-DiagnosticLogWriter $writer
     if ($computer) { $computer.Close() }
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()

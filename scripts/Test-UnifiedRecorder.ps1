@@ -48,14 +48,14 @@ try {
             if(-not $ready){Start-Sleep -Milliseconds 500}
         }while(-not $ready -and (Get-Date) -lt $deadline)
         if(-not $ready){throw ('Rust workers were not selected and recording: '+($nativeWorkers|ConvertTo-Json -Compress))}
-        $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'module-performance'){$peerIds[$w.name]=$w.pid}
-        $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-performance').pid
+        $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'activity'){$peerIds[$w.name]=$w.pid}
+        $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'activity').pid
         $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()
         $deadline=(Get-Date).AddSeconds(30);$recovered=$false
         do {
             Start-Sleep -Milliseconds 500
             $state=try {Get-Content $runtimePath -Raw -ErrorAction Stop|ConvertFrom-Json}catch{$null}
-            $replacement=$state.workers|Where-Object name -EQ 'module-performance'
+            $replacement=$state.workers|Where-Object name -EQ 'activity'
             $recovered=$replacement.recentRestarts -ge 1 -and $replacement.state -eq 'recording'
         }while(-not $recovered -and (Get-Date) -lt $deadline)
         if(-not $recovered){throw 'Native failure did not recover'}

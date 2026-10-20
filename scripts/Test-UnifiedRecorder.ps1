@@ -19,9 +19,10 @@ foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-Motherboa
 param([string]$LogRoot,[string]$LibraryDirectory,[int]$IntervalMilliseconds,[string]$Module,[string]$RunId,[string]$SettingsPath)
 $prefix=if($Module){'module-'+$Module}else{'PREFIX'}
 $path=Join-Path $LogRoot ($prefix+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
-$row=@{time=[DateTimeOffset]::Now.ToString('o');session='simulation';sequence=0;errors=@();gpu=@(@{temperatureC='50'});sensors=@(@{type='Temperature';value=50},@{type='Voltage';available=$true;value=12})}|ConvertTo-Json -Compress -Depth 5
-if($prefix -eq 'maintenance'){$row=$row.Replace('"errors":[]','"errors":[{"error":"synthetic provider failure before exit"}]')}
+$row=@{runId=$RunId;status='ok';completedAt=[DateTimeOffset]::Now.ToString('o');time=[DateTimeOffset]::Now.ToString('o');session='simulation';sequence=0;errors=@();gpu=@(@{temperatureC='50'});sensors=@(@{type='Temperature';value=50},@{type='Voltage';available=$true;value=12})}|ConvertTo-Json -Compress -Depth 5
+if($prefix -eq 'evidence'){$row=$row.Replace('"errors":[]','"errors":[{"error":"synthetic provider failure before exit"}]')}
 [IO.File]::AppendAllText($path,$row+"`n",[Text.UTF8Encoding]::new($false))
+if($Module){$directory=Join-Path (Split-Path $LogRoot) 'module-state';[void][IO.Directory]::CreateDirectory($directory);[IO.File]::WriteAllText((Join-Path $directory ($Module+'.json')),$row,[Text.UTF8Encoding]::new($false))}
 # Exit deliberately: the coordinator should relaunch this simulated worker.
 '@
     [IO.File]::WriteAllText((Join-Path $testRoot ('collectors\'+$e[0])),$fake.Replace('PREFIX',$e[1]),$utf8)
@@ -31,14 +32,14 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    $expectedRestarts=if($Native){13}else{18}
+    $expectedRestarts=if($Native){8}else{18}
     do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq $expectedRestarts}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
-    $failedRows=@(Get-Content (Join-Path $logRoot ('maintenance-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
+    $failedRows=@(Get-Content (Join-Path $logRoot ('evidence-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
     if(-not $failedRows[-1].errors.Count){throw 'Error-before-exit restart regression fixture was not exercised'}
     if($Native){
         $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
-        if($nativeWorkers.Count -ne 5 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
+        if($nativeWorkers.Count -ne 10 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
         $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'module-performance'){$peerIds[$w.name]=$w.pid}
         $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-performance').pid
         $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()
@@ -75,7 +76,7 @@ try {
     # Three correctly dated but empty samples must never validate a migration.
     foreach($prefix in @('cpu-auto','board-auto','activity')){
         $path=Join-Path $logRoot ($prefix+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
-        $row=@{time=[DateTimeOffset]::Now.ToString('o');errors=@()}|ConvertTo-Json -Compress
+        $row=@{runId=$RunId;status='ok';completedAt=[DateTimeOffset]::Now.ToString('o');time=[DateTimeOffset]::Now.ToString('o');errors=@()}|ConvertTo-Json -Compress
         [IO.File]::WriteAllText($path,(($row+"`n")*3),$utf8)
     }
     $rejected=$false

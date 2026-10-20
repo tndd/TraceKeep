@@ -15,6 +15,7 @@ try {
     $clock=[Diagnostics.Stopwatch]::StartNew()
     if($Module -and -not(Test-CollectionModuleEnabled $config $Module)){exit 0}
     if($Module){$owner=[IO.FileStream]::new((Join-Path $LogRoot ('module-'+$Module+'.owner.lock')),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
+    if(-not $Module){$owner=[IO.FileStream]::new((Join-Path $LogRoot 'extended.owner.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     $state=@{status='pending'}
     while(-not(Test-Path (Join-Path $LogRoot 'STOP-EXTENDED'))){
         if(-not $Module){

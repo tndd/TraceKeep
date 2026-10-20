@@ -2,7 +2,7 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-trait Query: DeserializeOwned + Serialize {
+pub(crate) trait Query: DeserializeOwned + Serialize {
     const CLASS: &'static str;
     const FIELDS: &'static [&'static str];
 }
@@ -10,13 +10,14 @@ macro_rules! query {
     ($name:ident, $class:literal, {$($field:ident:$kind:ty),+ $(,)?}) => {
         #[allow(non_snake_case)]
         #[derive(Deserialize, Serialize)]
-        struct $name { $( $field: Option<$kind> ),+ }
+        pub(crate) struct $name { $( $field: Option<$kind> ),+ }
         impl Query for $name {
             const CLASS: &'static str = $class;
             const FIELDS: &'static [&'static str] = &[$(stringify!($field)),+];
         }
     };
 }
+pub(crate) use query;
 query!(Cpu, "Win32_PerfFormattedData_PerfOS_Processor", {
     Name:String, PercentProcessorTime:u64, PercentPrivilegedTime:u64,
     PercentInterruptTime:u64, PercentDPCTime:u64, InterruptsPersec:u64, DPCsQueuedPersec:u64
@@ -66,15 +67,23 @@ fn reliability_filter(at: chrono::DateTime<chrono::Local>) -> Result<String, Str
 }
 
 fn legacy_time(row: &mut Value) -> Result<(), String> {
-    if let Some(date) = row["TimeGenerated"].as_str() {
-        row["TimeGenerated"] = json!(format!("/Date({})/", crate::collect::date_millis(date)?));
+    for field in [
+        "TimeGenerated",
+        "ReleaseDate",
+        "DriverDate",
+        "LastBootUpTime",
+        "InstallDate",
+    ] {
+        if let Some(date) = row[field].as_str() {
+            row[field] = json!(format!("/Date({})/", crate::collect::date_millis(date)?));
+        }
     }
     Ok(())
 }
 
 // Stop consuming the provider iterator at the bound. Do not retain a partial
 // result as if it were complete; the caller emits an explicit source issue.
-fn bounded_rows(
+pub(crate) fn bounded_rows(
     rows: impl IntoIterator<Item = Result<Value, String>>,
     max_rows: usize,
     max_bytes: usize,
@@ -94,12 +103,12 @@ fn bounded_rows(
 }
 
 #[derive(Default)]
-struct Evidence {
-    data: Map<String, Value>,
-    issues: Vec<Value>,
+pub(crate) struct Evidence {
+    pub(crate) data: Map<String, Value>,
+    pub(crate) issues: Vec<Value>,
 }
 impl Evidence {
-    fn add(&mut self, key: &str, source: &str, result: Result<Vec<Value>, String>) {
+    pub(crate) fn add(&mut self, key: &str, source: &str, result: Result<Vec<Value>, String>) {
         match result {
             Ok(rows) => {
                 self.data.insert(key.into(), json!(rows));
@@ -109,28 +118,45 @@ impl Evidence {
                 .push(json!({"source":source,"status":"unavailable","error":error})),
         }
     }
-    fn finish(self) -> Value {
+    pub(crate) fn finish(self) -> Value {
         json!({"status":if self.issues.is_empty(){"ok"}else{"partial"},"data":self.data,"issues":self.issues})
     }
 }
 
 #[cfg(windows)]
-#[derive(Default)]
-pub struct Reader(Option<wmi::WMIConnection>);
+pub struct Reader {
+    connection: Option<wmi::WMIConnection>,
+    namespace: &'static str,
+}
+#[cfg(windows)]
+impl Default for Reader {
+    fn default() -> Self {
+        Self::namespace("ROOT/CIMV2")
+    }
+}
 #[cfg(windows)]
 impl Reader {
-    fn read<T: Query>(
+    pub fn namespace(namespace: &'static str) -> Self {
+        Self {
+            connection: None,
+            namespace,
+        }
+    }
+    pub(crate) fn read<T: Query>(
         &mut self,
         filter: Option<&str>,
         dates: bool,
         max_bytes: usize,
     ) -> Result<Vec<Value>, String> {
         let result = (|| {
-            if self.0.is_none() {
-                self.0 = Some(wmi::WMIConnection::new().map_err(|e| e.to_string())?);
+            if self.connection.is_none() {
+                self.connection = Some(
+                    wmi::WMIConnection::with_namespace_path(self.namespace)
+                        .map_err(|e| e.to_string())?,
+                );
             }
             let rows = self
-                .0
+                .connection
                 .as_ref()
                 .unwrap()
                 .exec_query(query_text::<T>(filter))
@@ -152,7 +178,7 @@ impl Reader {
             )
         })();
         if result.is_err() {
-            self.0 = None;
+            self.connection = None;
         }
         result
     }

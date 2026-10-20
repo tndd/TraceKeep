@@ -11,7 +11,7 @@ pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
     let b=DateTime::parse_from_rfc3339(end).map_err(|_|"Invalid end timestamp")?.timestamp_millis();
     if b<=a||b-a>7_200_000{return Err("Select a positive range of at most two hours".into());}
     let mut streams=BTreeMap::new();
-    for (key,prefix,sensor) in [("cpu","cpu-auto-",true),("board","board-auto-",true),("activity","activity-",false),("events","events-",false),("performance","detail-performance-",false),("processes","detail-processes-",false),("reliability","detail-reliability-",false),("diskSpace","detail-diskSpace-",false),("gpuDetails","detail-gpuDetails-",false),("storage","storage-",false),("configurationJournal","detail-configurationJournal-",false),("crashConfigurationHistory","detail-crashConfiguration-",false),("collectorHealth","extended-",false),("cpuProgress","progress-cpu-",true),("boardProgress","progress-board-",true),("activityProgress","progress-activity-",false)]{
+    for (key,prefix,sensor) in [("cpu","cpu-auto-",true),("board","board-auto-",true),("activity","activity-",false),("events","events-",false),("performance","detail-performance-",false),("processes","detail-processes-",false),("reliability","detail-reliability-",false),("diskSpace","detail-diskSpace-",false),("inventory","detail-inventory-",false),("power","detail-power-",false),("gpuDetails","detail-gpuDetails-",false),("storage","storage-",false),("configurationJournal","detail-configurationJournal-",false),("crashConfigurationHistory","detail-crashConfiguration-",false),("collectorHealth","extended-",false),("cpuProgress","progress-cpu-",true),("boardProgress","progress-board-",true),("activityProgress","progress-activity-",false)]{
         streams.insert(key,read_stream(if sensor{&sources.sensor_root}else{&sources.activity_root},prefix,a,b));
     }
     let read_json=|name:&str|fs::read(machine_dir().join(name)).ok().and_then(|x|serde_json::from_slice::<Value>(&x).ok()).unwrap_or(Value::Null);
@@ -101,7 +101,7 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  #[test]fn detailed_history_keeps_intermediate_samples_and_reports_real_limits(){
   let dir=std::env::temp_dir().join(format!("tracekeep-complete-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
   let start=Local::now();let a=start.timestamp_millis();let b=a+60_000;
-  for prefix in ["detail-processes-","detail-gpuDetails-","detail-reliability-","detail-diskSpace-"] {
+  for prefix in ["detail-processes-","detail-gpuDetails-","detail-reliability-","detail-diskSpace-","detail-inventory-","detail-power-"] {
    let path=dir.join(format!("{prefix}{}.jsonl",start.format("%Y%m%d")));
    let bytes=(0..14).map(|i|format!("{}\n",json!({"time":start.to_rfc3339(),"sequence":i,"result":{"data":i}}))).collect::<String>();
    fs::write(&path,&bytes).unwrap();

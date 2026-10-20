@@ -76,7 +76,7 @@ function Copy-EvidenceTail($source,$destination,[long]$maxBytes=8MB) {
     try {$output.Write($bytes,$start,$end-$start);$output.Flush($true)}finally{$output.Dispose()}
     return @{source=$tail.path;sourceBytes=$tail.length;copiedBytes=(Get-Item -LiteralPath $destination).Length;tailLimited=($tail.length -gt $maxBytes);sha256=(Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash}
 }
-function Get-CrashConfiguration {
+function Get-CrashConfiguration([string]$DataRoot=(Join-Path $env:ProgramData 'PCDiagnostics')) {
     $errors=@();$settings=$null;$os=$null;$pagefiles=@();$dumps=@();$volumes=@()
     try {$settings=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl'|Select-Object CrashDumpEnabled,DumpFile,MinidumpDir,AutoReboot,LogEvent,AlwaysKeepMemoryDump,DedicatedDumpFile,DumpFileSize}catch{$errors+=$_.Exception.Message}
     try {$os=Get-CimInstance Win32_OperatingSystem|Select-Object LastBootUpTime,Version,BuildNumber,FreePhysicalMemory,TotalVisibleMemorySize}catch{$errors+=$_.Exception.Message}
@@ -87,7 +87,14 @@ function Get-CrashConfiguration {
     foreach($p in @($paths|Select-Object -Unique)){
         try {if(Test-Path -LiteralPath $p){$dumps+=@(Get-ChildItem -LiteralPath $p -Filter '*.dmp' -Recurse -File -ErrorAction Stop|Select-Object -First 100 FullName,Length,LastWriteTimeUtc)}}catch{$errors+=$_.Exception.Message}
     }
-    return @{time=[DateTimeOffset]::Now.ToString('o');settings=$settings;os=$os;pagefiles=$pagefiles;volumes=$volumes;dumpFiles=$dumps;errors=$errors;note='Read-only configuration and dump metadata; dump creation is not guaranteed by these settings.'}
+    $policy=@{status='unavailable'}
+    if($settings){
+        try {
+            . (Join-Path (Split-Path $script:EvidenceCollectorDirectory) 'management\CrashDump-Policy.ps1')
+            $policy=Get-DiagnosticDumpPolicyState $DataRoot $settings
+        }catch{$policy=@{status='unavailable';error=$_.Exception.Message}}
+    }
+    return @{time=[DateTimeOffset]::Now.ToString('o');settings=$settings;policy=$policy;os=$os;pagefiles=$pagefiles;volumes=$volumes;dumpFiles=$dumps;errors=$errors;note='Read-only configuration and dump metadata; dump creation is not guaranteed by these settings.'}
 }
 function Get-MachineEvidence {
     $result=@{time=[DateTimeOffset]::Now.ToString('o');errors=@()}
@@ -118,6 +125,34 @@ function Get-StorageEvidence($Config=$null) {
 function Get-BootEvidenceXPath($bootTime) {
     return "*[System[(EventID=41 or EventID=6008 or EventID=1001 or EventID=46 or EventID=161 or Provider[@Name='Microsoft-Windows-WHEA-Logger']) and TimeCreated[@SystemTime >= '"+([DateTimeOffset]$bootTime).UtcDateTime.AddDays(-3).ToString('yyyy-MM-ddTHH:mm:ss.fffZ')+"']]]"
 }
+function Save-IncidentConditions($DataRoot,$Destination,$BootTime) {
+    [void][IO.Directory]::CreateDirectory($Destination)
+    $manifest=Join-Path $Destination 'conditions.json'
+    if(Test-Path -LiteralPath $manifest){return $manifest}
+    $files=@()
+    foreach($name in @('machine-inventory.json','recorder-settings.json','collection-settings.json','coverage.json','sensor-driver-isolation.json','dump-policy-backup.json','event-channel-coverage.json')){
+        $source=Join-Path $DataRoot $name;$target=Join-Path $Destination $name
+        $entry=@{file=$name;observedAt=[DateTimeOffset]::Now.ToString('o')}
+        try {
+            if(Test-Path -LiteralPath $target){$entry.status='retained-existing-copy'}
+            elseif(Test-Path -LiteralPath $source){
+                Copy-Item -LiteralPath $source -Destination $target -ErrorAction Stop
+                $entry.status='captured'
+            }else{$entry.status='missing'}
+            if(Test-Path -LiteralPath $target){
+                $entry.sha256=(Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
+                $entry.bytes=(Get-Item -LiteralPath $target).Length
+                try {
+                    $content=Get-Content -Encoding UTF8 -LiteralPath $target -Raw|ConvertFrom-Json -ErrorAction Stop
+                    $entry.reportedTime=$content.time
+                }catch{$entry.status='invalid-json';$entry.error=$_.Exception.Message}
+            }
+        }catch{$entry.status='unavailable';$entry.error=$_.Exception.Message}
+        $files+=$entry
+    }
+    Save-EvidenceJson $manifest @{schemaVersion=1;capturedAt=[DateTimeOffset]::Now.ToString('o');bootTime=([DateTimeOffset]$BootTime).ToString('o');timeScope='Observed after this boot; not proof of pre-failure settings. Reported timestamps may be from an earlier worker/session.';files=$files}
+    return $manifest
+}
 function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     $key=([DateTimeOffset]$bootTime).UtcDateTime.ToString('yyyyMMddTHHmmssZ')
     $parent=Join-Path $dataRoot 'incidents';[void][IO.Directory]::CreateDirectory($parent)
@@ -125,6 +160,11 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     $manifestPath=Join-Path $dest 'manifest.json'
     if(Test-Path -LiteralPath $manifestPath){
         $existing=Get-Content -Encoding UTF8 -LiteralPath $manifestPath -Raw|ConvertFrom-Json
+        if(-not(Test-Path -LiteralPath (Join-Path $dest 'conditions.json'))){
+            # Old immutable bundles get a dated-observation supplement, never a
+            # replacement that would pretend today's settings existed before loss.
+            $null=Save-IncidentConditions $dataRoot (Join-Path $dest 'conditions-recovery') $bootTime
+        }
         if(@($existing.errors).Count -gt 0 -and -not(Test-Path -LiteralPath (Join-Path $dest 'event-recovery.json'))){
             # Preserve the original snapshot and failure manifest. Add a recovery
             # supplement without replacing any original sensor or event files.
@@ -139,13 +179,13 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     try {$events=@(Read-EvidenceEvents 'System' (Get-BootEvidenceXPath $bootTime) 5000 -Newest)}catch{$errors+=$_.Exception.Message}
     $abnormal=@($events|Where-Object {$_.Id -in @(41,6008) -and ([DateTimeOffset]$_.TimeCreated) -ge ([DateTimeOffset]$bootTime).AddMinutes(-2)})
     Save-EvidenceJson (Join-Path $dest 'crash-configuration.json') $crash
-    foreach($name in @('machine-inventory.json','recorder-settings.json')){if(Test-Path -LiteralPath (Join-Path $dataRoot $name)){Copy-Item -LiteralPath (Join-Path $dataRoot $name) -Destination (Join-Path $dest $name) -Force}}
+    $conditions=Save-IncidentConditions $dataRoot $dest $bootTime
     Save-EvidenceJson (Join-Path $dest 'boot-events.json') @($events|ForEach-Object {@{time=$_.TimeCreated.ToString('o');channel='System';recordId=$_.RecordId;provider=$_.ProviderName;id=$_.Id;xml=$_.ToXml()}})
     foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','maintenance-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-')){
         foreach($file in @(Get-DiagnosticDailyLogs $logRoot $prefix|Sort-Object Name -Descending|Select-Object -First 2)){
             try {$copied+=Copy-EvidenceTail $file.FullName (Join-Path $dest ($file.Name -replace '\.gz$',''))}catch{$errors+=$_.Exception.Message}
         }
     }
-    Save-EvidenceJson (Join-Path $dest 'manifest.json') @{version=1;createdAt=[DateTimeOffset]::Now.ToString('o');bootTime=([DateTimeOffset]$bootTime).ToString('o');classification=if($abnormal.Count){'abnormal-boot-evidence'}else{'boot-snapshot-unclassified'};abnormalEventCount=$abnormal.Count;files=$copied;errors=$errors;limits='Last two log dates per stream; last 8 MiB per file, final partial row omitted. Event lookback 3 days, maximum 5000. Dumps indexed only. Missing events do not prove a clean shutdown.'}
+    Save-EvidenceJson (Join-Path $dest 'manifest.json') @{version=2;createdAt=[DateTimeOffset]::Now.ToString('o');bootTime=([DateTimeOffset]$bootTime).ToString('o');classification=if($abnormal.Count){'abnormal-boot-evidence'}else{'boot-snapshot-unclassified'};abnormalEventCount=$abnormal.Count;conditions=$conditions;files=$copied;errors=$errors;limits='Last two log dates per stream; last 8 MiB per file, final partial row omitted. Event lookback 3 days, maximum 5000. Dumps indexed only. Missing events do not prove a clean shutdown.'}
     return $dest
 }

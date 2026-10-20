@@ -15,7 +15,7 @@ pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
         streams.insert(key,read_stream(if sensor{&sources.sensor_root}else{&sources.activity_root},prefix,a,b));
     }
     let read_json=|name:&str|fs::read(machine_dir().join(name)).ok().and_then(|x|serde_json::from_slice::<Value>(&x).ok()).unwrap_or(Value::Null);
-    Ok(json!({"schemaVersion":1,"start":start,"end":end,"queriedAt":Utc::now().to_rfc3339(),"streams":streams,"settings":read_json("collection-settings.json"),"coverage":read_json("coverage.json"),"sources":sources}))
+    Ok(json!({"schemaVersion":1,"start":start,"end":end,"queriedAt":Utc::now().to_rfc3339(),"streams":streams,"settings":read_json("collection-settings.json"),"coverage":read_json("coverage.json"),"crashConfiguration":read_json("crash-configuration.json"),"sources":sources}))
 }
 fn compact(prefix:&str,mut row:Value)->Value{
     if prefix=="events-" && row["provider"].as_str().is_some_and(|p|p.contains("PowerShell")) {row["xml"]=Value::Null;row["xmlOmitted"]=json!("High-volume PowerShell content omitted from view; retained in original log");}
@@ -26,7 +26,11 @@ fn read_stream(root:&Path,prefix:&str,a:i64,b:i64)->Value{
     read_stream_with_limit(root,prefix,a,b,FILE_LIMIT)
 }
 fn read_stream_with_limit(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64)->Value{
+    read_stream_with_limits(root,prefix,a,b,file_limit,ROW_LIMIT,OUTPUT_LIMIT)
+}
+fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row_limit:usize,output_limit:usize)->Value{
     let mut issues=vec![];let mut invalid=0;let mut incomplete=0;let mut unresolved=0;let mut clipped=false;let mut rows=VecDeque::new();let mut bytes_out=0;let mut cache:BTreeMap<String,Value>=BTreeMap::new();
+    let mut matched=0usize;let mut omitted=0usize;
     let files=match crate::log_files::daily_paths(root,prefix){Ok(v)=>v,Err(e)=>return json!({"rows":[],"issues":[e.to_string()],"truncated":false})};
     // Collectors name files using the recording machine's local calendar.
     let min=DateTime::from_timestamp_millis(a).unwrap().with_timezone(&Local).format("%Y%m%d").to_string();
@@ -53,10 +57,10 @@ fn read_stream_with_limit(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64)->Va
                 }
                 let Some(t)=r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis()) else{invalid+=1;continue;};
                 if t<a||t>=b{continue;}
+                matched+=1;
                 let r=compact(prefix,r);let n=r.to_string().len();
-                if matches!(prefix,"detail-processes-"|"detail-gpuDetails-") && rows.len()>=2 {if let Some((_,n))=rows.pop_front(){bytes_out-=n;}}
                 rows.push_back((r,n));bytes_out+=n;
-                while rows.len()>ROW_LIMIT||bytes_out>OUTPUT_LIMIT {if let Some((_,n))=rows.pop_front(){bytes_out-=n;clipped=true;}else{break;}}
+                while rows.len()>row_limit||bytes_out>output_limit {if let Some((_,n))=rows.pop_front(){bytes_out-=n;clipped=true;omitted+=1;}else{break;}}
             }
             // Probe EOF through the decoder to validate its trailer/checksum.
             drop(reader);
@@ -65,7 +69,7 @@ fn read_stream_with_limit(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64)->Va
             Ok(())
         })();if let Err(e)=result{issues.push(format!("{}: {e}",path.file_name().unwrap().to_string_lossy()));}
     }
-    json!({"rows":rows.into_iter().map(|(r,_)|r).collect::<Vec<_>>(),"issues":issues,"invalidLines":invalid,"incompleteTails":incomplete,"unresolvedReferences":unresolved,"truncated":clipped,"retention":if matches!(prefix,"detail-processes-"|"detail-gpuDetails-"){"last two samples in range"}else{"bounded range"}})
+    json!({"returnedRows":rows.len(),"matchedRowsInScan":matched,"omittedRows":omitted,"rows":rows.into_iter().map(|(r,_)|r).collect::<Vec<_>>(),"issues":issues,"invalidLines":invalid,"incompleteTails":incomplete,"unresolvedReferences":unresolved,"truncated":clipped,"retention":"bounded range; all matching samples unless explicit limits are reached"})
 }
 #[cfg(test)]mod tests{
  use super::*;
@@ -74,6 +78,26 @@ fn read_stream_with_limit(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64)->Va
  fn gzip(path:&Path,bytes:&[u8]) {
   let mut encoder=GzEncoder::new(fs::File::create(path).unwrap(),Compression::default());
   encoder.write_all(bytes).unwrap();encoder.finish().unwrap();
+ }
+ #[test]fn detailed_history_keeps_intermediate_samples_and_reports_real_limits(){
+  let dir=std::env::temp_dir().join(format!("tracekeep-complete-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
+  let start=Local::now();let a=start.timestamp_millis();let b=a+60_000;
+  for prefix in ["detail-processes-","detail-gpuDetails-"] {
+   let path=dir.join(format!("{prefix}{}.jsonl",start.format("%Y%m%d")));
+   let bytes=(0..14).map(|i|format!("{}\n",json!({"time":start.to_rfc3339(),"sequence":i,"result":{"data":i}}))).collect::<String>();
+   fs::write(&path,&bytes).unwrap();
+   let raw=read_stream(&dir,prefix,a,b);
+   assert_eq!(raw["rows"].as_array().unwrap().len(),14);
+   assert_eq!(raw["rows"][0]["sequence"],0);assert_eq!(raw["rows"][13]["sequence"],13);
+   assert_eq!(raw["matchedRowsInScan"],14);assert_eq!(raw["omittedRows"],0);assert_eq!(raw["truncated"],false);
+   gzip(&path.with_extension("jsonl.gz"),bytes.as_bytes());fs::remove_file(&path).unwrap();
+   assert_eq!(read_stream(&dir,prefix,a,b),raw);
+   let capped=read_stream_with_limits(&dir,prefix,a,b,FILE_LIMIT,3,OUTPUT_LIMIT);
+   assert_eq!(capped["returnedRows"],3);assert_eq!(capped["omittedRows"],11);assert_eq!(capped["truncated"],true);
+   let byte_capped=read_stream_with_limits(&dir,prefix,a,b,FILE_LIMIT,ROW_LIMIT,1);
+   assert_eq!(byte_capped["returnedRows"],0);assert_eq!(byte_capped["omittedRows"],14);assert_eq!(byte_capped["truncated"],true);
+  }
+  fs::remove_dir_all(dir).unwrap();
  }
  #[test]fn bounds_partial_and_references(){
   let dir=std::env::temp_dir().join(format!("tracekeep-history-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();

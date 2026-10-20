@@ -19,7 +19,7 @@ function Get-CimInstance {param($ClassName,$Namespace,$ErrorAction,$OperationTim
 $r=Get-ExtendedEvidence processes;Assert ($r.status -eq 'ok' -and @($r.data.processes).Count -eq 1 -and $r.data.processes[0].ProcessId -eq 123) 'Single-query module lost array shape'
 $r=Get-ExtendedEvidence inventory;Assert ($r.status -eq 'partial' -and $r.issues.Count -eq 1 -and $r.data.drivers.Count -eq 1) 'One failed provider must not lose other results'
 # Synthetic archive: byte integrity, stable receipt, partial resume, limits and locked source.
-$source=Join-Path $root 'sample.dmp';$bytes=New-Object byte[] 8192;for($i=0;$i -lt $bytes.Length;$i++){$bytes[$i]=$i%251};[IO.File]::WriteAllBytes($source,$bytes);[IO.File]::SetLastWriteTimeUtc($source,[DateTime]::UtcNow.AddMinutes(-2))
+$source=Join-Path $root 'sample.dmp';$bytes=New-Object byte[] 8192;for($i=0;$i -lt $bytes.Length;$i++){$bytes[$i]=$i%251};[Text.Encoding]::ASCII.GetBytes('MDMP').CopyTo($bytes,0);[BitConverter]::GetBytes([uint32]1).CopyTo($bytes,8);[BitConverter]::GetBytes([uint32]32).CopyTo($bytes,12);[BitConverter]::GetBytes([uint32]4).CopyTo($bytes,36);[BitConverter]::GetBytes([uint32]44).CopyTo($bytes,40);[IO.File]::WriteAllBytes($source,$bytes);[IO.File]::SetLastWriteTimeUtc($source,[DateTime]::UtcNow.AddMinutes(-2))
 $archive=Join-Path $root 'archive';$limits=@{maxArchiveFileBytes=1MB;maxArchiveBytes=10MB;reserveFreeBytes=1;maxFilesPerPass=64}
 $rows=@(Copy-DiagnosticArchive @((Get-Item $source)) $archive $limits)
 Assert ($rows.Count -eq 1 -and $rows[0].status -eq 'archived' -and (Get-FileHash $rows[0].destination).Hash -eq (Get-FileHash $source).Hash) 'Archive did not preserve exact bytes'

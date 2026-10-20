@@ -58,6 +58,8 @@ jobs:
       - name: Build desktop executable
         working-directory: src-tauri
         run: cargo +stable build --release --locked
+      - name: Evidence completeness regressions with isolated sources
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-EvidenceCompleteness.ps1
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
       - name: Desktop install and Windows startup recognition

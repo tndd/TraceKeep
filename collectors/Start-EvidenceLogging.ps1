@@ -18,7 +18,7 @@ try {
     $channels=@($channels|Select-Object -Unique)
     if(-not $config.modules.events.enabled){$channels=@()}
     Save-EvidenceJson (Join-Path $dataRoot 'event-channel-coverage.json') @{time=[DateTimeOffset]::Now.ToString('o');enabled=$config.modules.events.enabled;selected=$channels;catalog=$catalog;note='Disabled Windows channels are catalogued, not enabled. Analytic/debug ETW sessions are not started.'}
-    $crash=if($config.modules.crashConfiguration.enabled){Get-CrashConfiguration}else{@{status='disabled'}}
+    $crash=if($config.modules.crashConfiguration.enabled){Get-CrashConfiguration $dataRoot}else{@{status='disabled'}}
     if($config.modules.inventory.enabled){Save-EvidenceJson (Join-Path $dataRoot 'machine-inventory.json') (Get-MachineEvidence)}
     $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
     $session=[guid]::NewGuid().ToString();$iteration=0;$nextHealth=[DateTimeOffset]::MinValue;$nextCrash=[DateTimeOffset]::MinValue;$nextEvents=[DateTimeOffset]::MinValue;$bundlePending=$config.modules.incidents.enabled;$lastRecovery=@()
@@ -38,7 +38,7 @@ try {
             $nextHealth=[DateTimeOffset]::Now.AddSeconds($(if($seconds){$seconds}else{300}))
         }
         if($config.modules.crashConfiguration.enabled -and [DateTimeOffset]::Now -ge $nextCrash){
-            $crash=Get-CrashConfiguration;Save-EvidenceJson (Join-Path $dataRoot 'crash-configuration.json') $crash;$nextCrash=[DateTimeOffset]::Now.AddSeconds($config.modules.crashConfiguration.intervalSeconds)
+            $crash=Get-CrashConfiguration $dataRoot;Save-EvidenceJson (Join-Path $dataRoot 'crash-configuration.json') $crash;$nextCrash=[DateTimeOffset]::Now.AddSeconds($config.modules.crashConfiguration.intervalSeconds)
         }
         # Wait for boot events to settle before saving one immutable snapshot per boot.
         if($bundlePending -and $boot -and ([DateTimeOffset]::Now-([DateTimeOffset]$boot)).TotalSeconds -ge 90){

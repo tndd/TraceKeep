@@ -113,3 +113,41 @@ an incomplete first module pass. The existing supervisor test also reproduces
 an additional defect: an old error row used to overwrite `waiting`, resetting
 the retry time forever after a worker exited. Dead-worker retry states now
 remain intact.
+
+## First Rust collectors
+
+The standalone `recorder/` crate builds `tracekeep-worker.exe` without Tauri,
+WebView or PowerShell. Packaged coordinators select it for `configurationJournal`
+and `processes`; each remains a separate supervised process with the same
+intervals, timeouts and retry budget. Other collectors remain unchanged.
+Roots without the binary retain the PowerShell backend for compatibility and
+synthetic tests; installation/update manifests require the binary in new packages.
+Runtime and module records identify the selected backend.
+
+The process collector queries the same `Win32_Process` provider through COM/WMI,
+requesting only the existing fields. Numeric counters and Windows PowerShell's
+`/Date(milliseconds)/` creation timestamps remain compatible. WMI initialization
+and query stalls stay inside the process worker, not the supervisor. This first
+step removes the PowerShell host; it does not eliminate WMI provider costs.
+
+Both backends take a per-root module owner lock. The Rust writer also honors
+the existing per-log `.lock` protocol, preserves interrupted tails, validates
+and restores archived days, syncs records before publishing completion or
+unchanged references, and starts a full baseline after restart or a day change.
+Configuration observation remains read-only, including exact input hashes/text
+and the distinction between saved and coordinator-applied settings.
+
+Build/test after the frontend checks:
+
+```
+cargo test --manifest-path recorder/Cargo.toml --locked
+cargo build --manifest-path recorder/Cargo.toml --release --locked
+powershell.exe -NoProfile -File scripts/Test-UnifiedRecorder.ps1 -Native
+powershell.exe -NoProfile -File scripts/Test-RustWorkers.ps1
+```
+
+The native integration test uses temporary log roots, read-only process/registry
+queries and the existing CLI. It checks field parity, duplicate-backend exclusion,
+independent termination/restart, changed settings, graceful stop and raw/gzip
+history equality. It does not stop or replace installed collectors, write
+registry settings, install drivers or inject hardware faults.

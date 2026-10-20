@@ -22,3 +22,5 @@ __pycache__/
 /frontend/node_modules/
 /ui/dashboard/
 /frontend/public/*.local.json
+
+/recorder/target/

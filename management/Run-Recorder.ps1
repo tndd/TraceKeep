@@ -33,6 +33,13 @@ function Record-Controller($value) {
     try {Write-DiagnosticLogLine $handle ($value|ConvertTo-Json -Compress -Depth 5)}finally{Close-DiagnosticLogWriter $handle}
 }
 function Launch-Worker($w) {
+    $native=Join-Path $codeRoot 'tracekeep-worker.exe'
+    $w.backend='powershell'
+    if($w.module -in @('configurationJournal','processes') -and (Test-Path -LiteralPath $native)){
+        $args='--log-root "'+$logRoot+'" --settings "'+$activeSettings+'" --module '+$w.module+' --run-id "'+$runId+'"'
+        $w.process=Start-Process -FilePath $native -ArgumentList $args -WindowStyle Hidden -PassThru
+        $w.backend='rust'
+    }else{
     $args='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$w.script+'" -LogRoot "'+$logRoot+'"'
     if($w.name -in @('cpu','board')) {$args+=' -LibraryDirectory "'+$library+'"'}
     if($w.name -in @('cpu','board','activity')) {$args+=' -IntervalMilliseconds '+$intervals[$w.name]}
@@ -40,10 +47,11 @@ function Launch-Worker($w) {
     if($w.name -eq 'extended' -or $w.module){$args+=' -RunId "'+$runId+'"'}
     if($w.module){$args+=' -Module "'+$w.module+'"'}
     $w.process=Start-Process -FilePath $shell -ArgumentList $args -WindowStyle Hidden -PassThru
+    }
     $null=$w.process.Handle
     $w.started=[DateTimeOffset]::Now
     $w.state='starting'
-    Record-Controller @{event='worker-start';worker=$w.name;pid=$w.process.Id}
+    Record-Controller @{event='worker-start';worker=$w.name;pid=$w.process.Id;backend=$w.backend}
 }
 try {
     try {$locked=$mutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$locked=$true}
@@ -88,7 +96,7 @@ try {
                 try {$row=Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
             }
         }
-        $runtime=@{time=$now.ToString('o');pid=$PID;runId=$runId;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;enabled=$_.enabled;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}
+        $runtime=@{time=$now.ToString('o');pid=$PID;runId=$runId;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;enabled=$_.enabled;backend=$_.backend;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}
         $temp=Join-Path $DataRoot 'runtime.tmp'
         [IO.File]::WriteAllText($temp,($runtime|ConvertTo-Json -Depth 5),$utf8)
         $dest=Join-Path $DataRoot 'runtime.json'

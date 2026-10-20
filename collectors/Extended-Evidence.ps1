@@ -1,3 +1,17 @@
+function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[DateTimeOffset]$Started,[long]$DurationMs,[DateTimeOffset]$Now=[DateTimeOffset]::Now) {
+    $json=$Result|ConvertTo-Json -Depth 12 -Compress
+    $sha=[Security.Cryptography.SHA256]::Create()
+    try {$hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($json)))).Replace('-','')}finally{$sha.Dispose()}
+    $day=$Now.LocalDateTime.ToString('yyyyMMdd')
+    $unchanged=$Hashes.ContainsKey($Name) -and $Hashes[$Name].day -eq $day -and $Hashes[$Name].hash -eq $hash
+    $record=@{time=$Now.ToString('o');startedAt=$Started.ToString('o');monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;module=$Name;durationMs=$DurationMs;status=$Result.status;sha256=$hash;unchanged=$unchanged}
+    if(-not $unchanged){$record.result=$Result}
+    # Filename and reference scope use the same captured date, including midnight.
+    # Commit the reference only after the full record has reached durable storage.
+    Add-EvidenceRecord $LogRoot ('detail-'+$Name) $record -Day $day
+    $Hashes[$Name]=@{day=$day;hash=$hash}
+    return $record
+}
 function Read-DiagnosticClass($Class,$Properties,$Namespace='root/cimv2',$Filter) {
     $args=@{ClassName=$Class;Namespace=$Namespace;ErrorAction='Stop';OperationTimeoutSec=8}
     if($Filter){$args.Filter=$Filter}

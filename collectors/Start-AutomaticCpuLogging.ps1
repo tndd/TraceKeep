@@ -1,5 +1,6 @@
 param([int]$MaxSamples = 0, [switch]$Probe, [string]$LogRoot, [string]$LibraryDirectory, [ValidateRange(1000,5000)][int]$IntervalMilliseconds=2000)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'Log-Storage.ps1')
 $root = $LogRoot
 if (-not $root) { $root = Join-Path $PSScriptRoot 'sensor-logs' }
 $libraryDir = $LibraryDirectory
@@ -49,14 +50,12 @@ try {
         } else {
             $today = Get-Date -Format 'yyyyMMdd'
             if ($today -ne $day) {
-                if ($writer) { $writer.Dispose() }
-                $stream = [IO.FileStream]::new((Join-Path $root "cpu-auto-$today.jsonl"), [IO.FileMode]::Append, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite, 4096, [IO.FileOptions]::WriteThrough)
-                $writer = [IO.StreamWriter]::new($stream, [Text.UTF8Encoding]::new($false))
+                Close-DiagnosticLogWriter $writer
+                $writer = $null
+                $writer = Open-DiagnosticLogWriter (Join-Path $root "cpu-auto-$today.jsonl")
                 $day = $today
             }
-            $writer.WriteLine(($record | ConvertTo-Json -Depth 6 -Compress))
-            $writer.Flush()
-            $writer.BaseStream.Flush($true)
+            Write-DiagnosticLogLine $writer ($record | ConvertTo-Json -Depth 6 -Compress)
         }
         $sample++
         if ($MaxSamples -gt 0 -and $sample -ge $MaxSamples) { break }
@@ -68,7 +67,7 @@ try {
     Write-Error $_ -ErrorAction Continue
     exit 1
 } finally {
-    if ($writer) { $writer.Dispose() }
+    Close-DiagnosticLogWriter $writer
     if ($computer) { $computer.Close() }
     if ($locked) { $mutex.ReleaseMutex() }
     $mutex.Dispose()

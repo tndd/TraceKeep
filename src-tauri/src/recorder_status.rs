@@ -20,7 +20,7 @@ pub fn summary(c:&Value) -> Value {
     let (state,label)=if c["configured"]!=true {("unconfigured","記録が未設定です")}
         else if c["stopRequested"]==true {if fresh {("stopping","記録を停止しています")}else{("stopped","記録は停止中です")}}
         else if !fresh {("unknown","記録の更新を確認できません")}
-        else if complete {("recording","記録中")}
+        else if complete && workers.is_some_and(|a|a.iter().filter(|w|w["name"]=="maintenance").all(|w|w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0))) {("recording","記録中")}
         else {("attention","一部の記録を確認してください")};
     json!({"state":state,"label":label,"runningWorkers":running,"enabledWorkers":enabled,"heartbeatAgeSeconds":c["heartbeatAgeSeconds"],"time":c["runtime"]["time"]})
 }
@@ -34,4 +34,5 @@ pub fn summary(c:&Value) -> Value {
     #[test] fn stale_and_missing_do_not_show_green(){let mut c=healthy();assert_eq!(summary(&c)["state"],"recording");c["heartbeatAgeSeconds"]=json!(11);assert_eq!(summary(&c)["state"],"unknown");c["heartbeatAgeSeconds"]=json!(-2);assert_eq!(summary(&c)["state"],"unknown");assert_ne!(summary(&json!({}))["state"],"recording");}
     #[test] fn failure_and_opt_out_are_different(){let mut c=healthy();c["runtime"]["workers"][0]["errorCount"]=json!(1);assert_eq!(summary(&c)["state"],"attention");c["runtime"]["workers"][0]["enabled"]=json!(false);assert_eq!(summary(&c)["state"],"attention");c["runtime"]["workers"][0]["state"]=json!("disabled");assert_eq!(summary(&c)["state"],"recording");}
     #[test] fn explicit_stop_is_not_a_recording_failure(){let mut c=healthy();c["stopRequested"]=json!(true);assert_eq!(summary(&c)["state"],"stopping");c["heartbeatAgeSeconds"]=json!(30);assert_eq!(summary(&c)["state"],"stopped");}
+    #[test] fn optional_maintenance_failure_requires_attention(){let mut c=healthy();c["runtime"]["workers"].as_array_mut().unwrap().push(json!({"name":"maintenance","enabled":true,"state":"recording-with-errors","errorCount":1}));assert_eq!(summary(&c)["state"],"attention");c["runtime"]["workers"][5]["state"]=json!("recording");c["runtime"]["workers"][5]["errorCount"]=json!(0);assert_eq!(summary(&c)["state"],"recording");}
 }

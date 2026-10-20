@@ -34,6 +34,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1
       - name: Evidence recovery and partial-write handling
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Evidence.ps1
+      - name: Durable append and daily gzip storage
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-LogStorage.ps1
       - name: NVMe health decoder and read-only request bounds
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-NvmeHealth.ps1
       - name: Extended collection, opt-out and archive integrity
@@ -70,7 +72,7 @@ jobs:
           Copy-Item src-tauri/icons/icon.ico -Destination package/TraceKeep.ico
           Copy-Item README.md -Destination package
           Copy-Item (Join-Path $env:RUNNER_TEMP 'tray-icons') -Destination package/test-previews -Recurse
-          $files = @('collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+          $files = @('collectors\Log-Storage.ps1','collectors\Start-LogMaintenance.ps1','collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
           $manifest = @{files=@($files | ForEach-Object {@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path 'package' $_) -Algorithm SHA256).Hash}})}
           [IO.File]::WriteAllText((Join-Path $PWD 'package/update-manifest.json'),($manifest | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
           & package/pcdiag.exe help

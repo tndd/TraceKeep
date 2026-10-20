@@ -78,6 +78,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-EvidenceCompleteness.ps1
       - name: Rust worker compatibility, gzip and independent restart
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustWorkers.ps1
+      - name: Native metrics, reliability and space compatibility
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustMetrics.ps1
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
       - name: Desktop install and Windows startup recognition

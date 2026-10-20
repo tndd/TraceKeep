@@ -20,31 +20,38 @@ pub fn sha(bytes: &[u8]) -> String {
 }
 
 pub fn json_bytes(row: &Value) -> io::Result<Vec<u8>> {
-    // Windows PowerShell recognizes legacy CreationDate values as DateTime only
+    // Windows PowerShell recognizes legacy WMI date values as DateTime only
     // with escaped slashes. Do not coerce unrelated strings that resemble dates.
-    let text = serde_json::to_string(row)?;
-    let marker = "\"CreationDate\":\"/Date(";
+    let mut text = serde_json::to_string(row)?;
+    for field in ["CreationDate", "TimeGenerated"] {
+        text = escape_legacy_date(&text, field);
+    }
+    Ok(text.into_bytes())
+}
+
+fn escape_legacy_date(text: &str, field: &str) -> String {
+    let marker = format!("\"{field}\":\"/Date(");
     let mut output = String::with_capacity(text.len());
     let mut offset = 0;
-    while let Some(index) = text[offset..].find(marker) {
+    while let Some(index) = text[offset..].find(&marker) {
         let start = offset + index;
         output.push_str(&text[offset..start]);
         let number = start + marker.len();
         if let Some(end) = text[number..].find(")/\"") {
             let end = number + end;
             if text[number..end].parse::<i64>().is_ok() {
-                output.push_str("\"CreationDate\":\"\\/Date(");
+                output.push_str(&format!("\"{field}\":\"\\/Date("));
                 output.push_str(&text[number..end]);
                 output.push_str(")\\/\"");
                 offset = end + 3;
                 continue;
             }
         }
-        output.push_str(marker);
+        output.push_str(&marker);
         offset = number;
     }
     output.push_str(&text[offset..]);
-    Ok(output.into_bytes())
+    output
 }
 
 pub fn exclusive(path: &Path) -> io::Result<File> {
@@ -257,8 +264,11 @@ mod tests {
     }
     #[test]
     fn legacy_dates_keep_powershell_datetime_decoding_without_changing_json_values() {
-        let row = json!({"CreationDate":"/Date(123)/","raw":"{\"path\":\"a/b\"}","ordinary":"/Date(456)/"});
+        let row = json!({"CreationDate":"/Date(123)/","TimeGenerated":"/Date(789)/","raw":"{\"path\":\"a/b\"}","ordinary":"/Date(456)/"});
         let bytes = json_bytes(&row).unwrap();
+        assert!(String::from_utf8(bytes.clone())
+            .unwrap()
+            .contains(r"\/Date(789)\/"));
         assert!(String::from_utf8(bytes.clone())
             .unwrap()
             .contains(r"\/Date(123)\/"));

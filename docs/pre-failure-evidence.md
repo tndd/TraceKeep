@@ -151,3 +151,40 @@ queries and the existing CLI. It checks field parity, duplicate-backend exclusio
 independent termination/restart, changed settings, graceful stop and raw/gzip
 history equality. It does not stop or replace installed collectors, write
 registry settings, install drivers or inject hardware faults.
+
+## Second Rust collectors
+
+`performance`, `reliability` and `diskSpace` now also use independent native
+workers. The preceding deployment measurement put their combined private
+commit at about 282 MiB (92, 105 and 85 MiB respectively). Performance and
+space accounting run every 15/60 seconds; reliability runs every 300 seconds.
+They remove three PowerShell hosts without changing the sensor/.NET/driver
+boundary, event checkpointing, or crash-file preservation.
+
+Performance reads the same five WMI classes and selected fields, including
+formatted counters and raw disk-latency numerator/base/frequency values.
+Counters remain integers or null, without unit conversion or synthetic zeroes.
+Reliability retains the seven-local-calendar-day filter, fields and escaped
+Windows PowerShell `TimeGenerated` date encoding. Each provider failure is
+reported without discarding successful independent sources. WMI enumeration
+is bounded by rows and serialized bytes; exceeding a bound omits that source
+with an explicit issue. WMI can still block in the provider, in which case the
+existing supervisor stall deadline applies to that worker only.
+
+Space accounting uses `GetDiskFreeSpaceExW`, counts top-level log files and
+recursive archive files, respects `reserveFreeBytes`, and never deletes data.
+Like the existing collector, it excludes hidden/system entries. Directory
+traversal has entry, depth and elapsed-time bounds and does not follow reparse
+points. Incomplete counts are null with explicit issues, rather than silently
+underreporting usage; known low free space still produces a warning.
+
+The CLI history reader now exposes the existing `reliability` and `diskSpace`
+streams as well as `performance`, for both old PowerShell and native records,
+including gzip and unchanged-reference resolution. No existing stream is removed.
+
+`scripts/Test-RustMetrics.ps1` checks real read-only provider field/type parity,
+reliability timestamps, synthetic directory sizes, low-space warnings, junction
+exclusion, opt-out and raw/gzip history equality. Mixed-recorder testing kills
+only its private performance worker and verifies recovery without restarting
+the other four native workers. Unit tests cover partial provider failures,
+counter precision/nulls, query bounds and incomplete directory scans.

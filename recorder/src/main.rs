@@ -1,4 +1,6 @@
 mod collect;
+mod metrics;
+mod space;
 mod storage;
 
 use chrono::{Local, SecondsFormat};
@@ -156,7 +158,15 @@ impl Options {
         let settings = PathBuf::from(required("--settings")?);
         let module = required("--module")?;
         let run_id = required("--run-id")?;
-        if !["configurationJournal", "processes"].contains(&module.as_str()) {
+        if ![
+            "configurationJournal",
+            "processes",
+            "performance",
+            "reliability",
+            "diskSpace",
+        ]
+        .contains(&module.as_str())
+        {
             return Err("Unsupported Rust module".into());
         }
         if !logs.is_absolute() || !settings.is_absolute() {
@@ -182,7 +192,12 @@ fn interval(settings: &Value, module: &str) -> Result<Option<Duration>, String> 
     if settings["schemaVersion"] != 1 {
         return Err("Unsupported settings schema".into());
     }
-    let defaults = if module == "processes" { 30 } else { 15 };
+    let defaults = match module {
+        "processes" => 30,
+        "reliability" => 300,
+        "diskSpace" => 60,
+        _ => 15,
+    };
     let entry = &settings["modules"][module];
     if entry["enabled"] == false {
         return Ok(None);
@@ -296,12 +311,19 @@ fn run(options: &Options) -> Result<(), String> {
     };
     let data = options.logs.parent().ok_or("Log root has no parent")?;
     let mut processes = collect::Processes::new();
-    record_loop(options, interval, || {
-        if options.module == "configurationJournal" {
-            collect::journal(data, collect::registry())
-        } else {
-            processes.collect()
-        }
+    let mut metrics = metrics::Reader::default();
+    let reserve = if options.module == "diskSpace" {
+        space::reserve(&settings)?
+    } else {
+        0
+    };
+    record_loop(options, interval, || match options.module.as_str() {
+        "configurationJournal" => collect::journal(data, collect::registry()),
+        "processes" => processes.collect(),
+        "performance" => metrics.performance(),
+        "reliability" => metrics.reliability(),
+        "diskSpace" => space::collect(data, reserve),
+        _ => unreachable!(),
     })
     .map_err(|e| e.to_string())
 }

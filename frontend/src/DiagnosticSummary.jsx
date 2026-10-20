@@ -84,7 +84,7 @@ export function DiagnosticSummary({onGo,onEvent,onInspect,onPick,eventChart,cpuC
    </Panel>
    <Panel title="記録の取得状況" eyebrow="RECORDING COVERAGE" action={<Tag>期間内の実測</Tag>}>
     <div className="coverage-table"><div className="coverage-heading"><span>ソース / 標本数</span><span>最大記録間隔</span></div>{D.sources.map(s=><button key={s.name} onClick={()=>onInspect(s.name+'の取得状況',{period:E.period,samples:s.count,first:s.first,last:s.last,maxIntervalSeconds:s.maxGap,note:'保存ログ内の実測間隔。現在の稼働状態ではありません。'})}><span><b>{s.name}</b><small>{s.count.toLocaleString()}件 · 最終 {time(s.last)}</small></span><strong>{fmt(s.maxGap,2)}<small> 秒</small></strong></button>)}</div>
-    <div className="coverage-foot"><InformationCircleIcon/><span>設定間隔と実測間隔を区別<small>プロセス群は直近2標本を保持</small></span></div>
+    <div className="coverage-foot"><InformationCircleIcon/><span>設定間隔と実測間隔を区別<small>プロセス図は期間末尾2標本の差分。履歴は期間内を取得</small></span></div>
     <button className="text-button" onClick={()=>onGo('settings')}>収集設定・ソースの詳細 <ArrowUpRightIcon/></button>
    </Panel>
   </div>

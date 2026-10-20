@@ -73,7 +73,7 @@ fn run()->Result<i32,String>{
             _=>return Err("Use: pcdiag config show | enable/disable MODULE | interval MODULE SECONDS".into())
         };return management("config",&extra);
     }
-    if command=="coverage"{if args.len()!=1{return Err("Unexpected argument".into());}println!("{}",serde_json::to_string_pretty(&json!({"coverage":read_json(machine_dir().join("coverage.json")),"eventChannels":read_json(machine_dir().join("event-channel-coverage.json")),"settings":read_json(machine_dir().join("collection-settings.json")),"dumpPolicy":read_json(machine_dir().join("dump-policy-backup.json"))})).unwrap());return Ok(0);}
+    if command=="coverage"{if args.len()!=1{return Err("Unexpected argument".into());}println!("{}",serde_json::to_string_pretty(&json!({"coverage":read_json(machine_dir().join("coverage.json")),"eventChannels":read_json(machine_dir().join("event-channel-coverage.json")),"settings":read_json(machine_dir().join("collection-settings.json")),"dumpPolicy":read_json(machine_dir().join("dump-policy-backup.json")),"dumpPolicyObservation":read_json(machine_dir().join("crash-configuration.json"))})).unwrap());return Ok(0);}
     if ["start","stop","restart","rollback","upgrade"].contains(&command){if args.len()!=1{return Err("Unexpected argument".into());}return management(command,&[]);}
     if ["evidence","incidents"].contains(&command){
         if args.len()!=1{return Err("Unexpected argument".into());}

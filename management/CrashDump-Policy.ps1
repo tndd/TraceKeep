@@ -8,10 +8,34 @@ function Protect-DiagnosticArchive($Path) {
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
 }
+function Get-DiagnosticDumpPolicyState($DataRoot,$Current) {
+    $path=Join-Path $DataRoot 'dump-policy-backup.json'
+    if(-not(Test-Path -LiteralPath $path)){return @{status='unmanaged';current=$Current}}
+    try {$prior=Get-Content -Encoding UTF8 -LiteralPath $path -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop}
+    catch{return @{status='unavailable';error=$_.Exception.Message;current=$Current}}
+    if(-not $prior.active){return @{status='inactive';current=$Current}}
+    if(-not @($prior.entries).Count){return @{status='unavailable';error='Active dump policy has no recorded settings';current=$Current}}
+    $differences=@();$expected=@{}
+    foreach($entry in $prior.entries){
+        $expected[$entry.name]=$entry.applied
+        $exists=$Current.PSObject.Properties.Name -contains $entry.name
+        if(-not $exists -or $Current.($entry.name) -ne $entry.applied){
+            $differences+=@{name=$entry.name;expected=$entry.applied;current=$Current.($entry.name);exists=$exists}
+        }
+    }
+    return @{status=if($differences.Count){'drifted'}else{'matching'};expected=$expected;current=$Current;differences=$differences;note='Compared to last applied values; external changes are not overwritten. Dump creation is not guaranteed.'}
+}
 function Enable-DiagnosticDumps($DataRoot,$Key='HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl') {
     $path=Join-Path $DataRoot 'dump-policy-backup.json'
-    if(Test-Path $path){$prior=Get-Content -Encoding UTF8 $path -Raw|ConvertFrom-Json;if($prior.active){return @{status='already-configured';restartRequired=$true}}}
     $current=Get-ItemProperty -LiteralPath $Key -ErrorAction Stop
+    if(Test-Path $path){
+        $prior=Get-Content -Encoding UTF8 $path -Raw|ConvertFrom-Json
+        if($prior.active){
+            $state=Get-DiagnosticDumpPolicyState $DataRoot $current
+            if($state.status -eq 'matching'){$state.status='already-configured'}
+            return $state
+        }
+    }
     $wanted=@{CrashDumpEnabled=7;AlwaysKeepMemoryDump=1;LogEvent=1}
     if($current.CrashDumpEnabled -in @(1,2,7)){$wanted.CrashDumpEnabled=[int]$current.CrashDumpEnabled}
     $entries=@(foreach($name in $wanted.Keys){@{name=$name;existed=($current.PSObject.Properties.Name -contains $name);previous=$current.$name;applied=$wanted[$name]}})

@@ -1,10 +1,17 @@
-function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[DateTimeOffset]$Started,[long]$DurationMs,[DateTimeOffset]$Now=[DateTimeOffset]::Now) {
+function Get-ExtendedNextDeadline([double]$DueMs,[double]$CompletedMs,[double]$IntervalMs) {
+    if($IntervalMs -le 0){throw 'Interval must be positive'}
+    $next=$DueMs+$IntervalMs
+    $missed=if($next -lt $CompletedMs){[Math]::Ceiling(($CompletedMs-$next)/$IntervalMs)}else{0}
+    return @{nextMs=($next+$missed*$IntervalMs);missedIntervals=[long]$missed}
+}
+function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[DateTimeOffset]$Started,[long]$DurationMs,[DateTimeOffset]$Now=[DateTimeOffset]::Now,$Schedule=$null) {
     $json=$Result|ConvertTo-Json -Depth 12 -Compress
     $sha=[Security.Cryptography.SHA256]::Create()
     try {$hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($json)))).Replace('-','')}finally{$sha.Dispose()}
     $day=$Now.LocalDateTime.ToString('yyyyMMdd')
     $unchanged=$Hashes.ContainsKey($Name) -and $Hashes[$Name].day -eq $day -and $Hashes[$Name].hash -eq $hash
     $record=@{time=$Now.ToString('o');startedAt=$Started.ToString('o');monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;module=$Name;durationMs=$DurationMs;status=$Result.status;sha256=$hash;unchanged=$unchanged}
+    if($Schedule){$record.schedule=$Schedule}
     if(-not $unchanged){$record.result=$Result}
     # Filename and reference scope use the same captured date, including midnight.
     # Commit the reference only after the full record has reached durable storage.
@@ -81,6 +88,36 @@ function Get-DiagnosticFiles($Roots,$Pattern,[int]$Limit=512) {
     }
     return @{files=$files;limited=($queue.Count -gt 0 -or $files.Count -ge $Limit);issues=$issues}
 }
+function Get-DiagnosticDumpValidation([string]$Path) {
+    # Lightweight structural checks, not a debugger verdict. All bytes are retained.
+    $stream=[IO.File]::OpenRead($Path)
+    try {
+        if($stream.Length -eq 0){return @{version=1;status='invalid';reason='empty-file';analysisVerified=$false}}
+        $header=New-Object byte[] 32
+        $count=$stream.Read($header,0,$header.Length)
+        if($count -lt 8){return @{version=1;status='invalid';reason='incomplete-header';analysisVerified=$false}}
+        $signature=[Text.Encoding]::ASCII.GetString($header,0,4)
+        if($signature -eq 'MDMP'){
+            if($count -lt 32){return @{version=1;status='invalid';reason='incomplete-minidump-header';analysisVerified=$false}}
+            [long]$streams=[BitConverter]::ToUInt32($header,8);[long]$directory=[BitConverter]::ToUInt32($header,12)
+            if($streams -eq 0 -or $directory -lt 32 -or $directory+$streams*12 -gt $stream.Length){
+                return @{version=1;status='invalid';reason='incomplete-stream-directory';analysisVerified=$false}
+            }
+            if($streams -gt 4096){return @{version=1;status='unverified';reason='directory-check-budget';analysisVerified=$false}}
+            [void]$stream.Seek($directory,[IO.SeekOrigin]::Begin)
+            $entry=New-Object byte[] 12
+            for($i=0;$i -lt $streams;$i++){
+                if($stream.Read($entry,0,12) -ne 12){return @{version=1;status='invalid';reason='incomplete-stream-directory';analysisVerified=$false}}
+                [long]$bytes=[BitConverter]::ToUInt32($entry,4);[long]$offset=[BitConverter]::ToUInt32($entry,8)
+                if($offset+$bytes -gt $stream.Length){return @{version=1;status='invalid';reason='incomplete-stream-data';analysisVerified=$false}}
+            }
+            return @{version=1;status='structure-checked';format='minidump';analysisVerified=$false;note='Directory and stream ranges checked; nested contents and debugger analysis not verified'}
+        }
+        # Kernel dumps use a different format; do not label an unfamiliar format
+        # corrupt merely because it is not a user-mode MINIDUMP_HEADER.
+        return @{version=1;status='unverified';reason='format-requires-debugger';signature=$signature;analysisVerified=$false}
+    }finally{$stream.Dispose()}
+}
 function Copy-DiagnosticArchive($Files,$ArchiveRoot,$Limits,[int]$BudgetSeconds=20) {
     [void][IO.Directory]::CreateDirectory($ArchiveRoot)
     $timer=[Diagnostics.Stopwatch]::StartNew();$results=@();$count=0
@@ -90,7 +127,21 @@ function Copy-DiagnosticArchive($Files,$ArchiveRoot,$Limits,[int]$BudgetSeconds=
         $identity=$item.FullName+'|'+$item.Length+'|'+$item.LastWriteTimeUtc.Ticks
         $sha=[Security.Cryptography.SHA256]::Create();try {$key=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($identity)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
         $receipt=Join-Path $ArchiveRoot ($key+'.json');$dest=Join-Path $ArchiveRoot ($key+$item.Extension);$partial=$dest+'.partial'
-        if(Test-Path $receipt){$saved=Get-Content -Encoding UTF8 $receipt -Raw|ConvertFrom-Json;if((Test-Path $dest) -and (Get-Item $dest).Length -eq $item.Length){continue}}
+        if(Test-Path $receipt){
+            $saved=Get-Content -Encoding UTF8 $receipt -Raw|ConvertFrom-Json
+            if((Test-Path $dest) -and (Get-Item $dest).Length -eq $item.Length){
+                if($item.Extension -ieq '.dmp'){
+                    $validation=Get-DiagnosticDumpValidation $dest
+                    if($saved.validation.version -ne $validation.version -or $saved.validation.status -ne $validation.status -or $saved.validation.reason -ne $validation.reason){
+                        $saved|Add-Member -NotePropertyName validation -NotePropertyValue $validation -Force
+                        Save-EvidenceJson $receipt $saved
+                    }
+                    # Persist the warning even when no new copy is necessary.
+                    if($validation.status -ne 'structure-checked'){$results+=$saved}
+                }
+                continue
+            }
+        }
         $row=@{source=$item.FullName;bytes=$item.Length;sourceModifiedUtc=$item.LastWriteTimeUtc.ToString('o');status='pending'}
         if($item.Length -gt $Limits.maxArchiveFileBytes){$row.status='skipped';$row.reason='file-size-limit';$results+=$row;continue}
         if(([DateTime]::UtcNow-$item.LastWriteTimeUtc).TotalSeconds -lt 60){$row.reason='source-recent';$results+=$row;continue}
@@ -115,7 +166,9 @@ function Copy-DiagnosticArchive($Files,$ArchiveRoot,$Limits,[int]$BudgetSeconds=
             if($complete){
                 $row.sha256=(Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
                 if(Test-Path $dest){if((Get-FileHash $dest).Hash -ne $row.sha256){throw 'Existing archive hash conflict; both copies retained'};Remove-Item -LiteralPath $partial}else{[IO.File]::Move($partial,$dest)}
-                $row.status='archived';$row.destination=$dest;Save-EvidenceJson $receipt $row
+                $row.status='archived';$row.destination=$dest
+                if($item.Extension -ieq '.dmp'){$row.validation=Get-DiagnosticDumpValidation $dest}
+                Save-EvidenceJson $receipt $row
             }else{$row.status='pending';$row.reason='copy-resumes-next-pass';$row.copiedBytes=(Get-Item $partial).Length}
         }catch{$row.status='unavailable';$row.error=$_.Exception.Message}
         $results+=$row
@@ -134,7 +187,8 @@ function Get-ArchiveEvidence($Module,$DataRoot,$Limits) {
     }
     $files=@($scan.files|Sort-Object FullName -Unique|Sort-Object LastWriteTimeUtc -Descending)
     $rows=@(Copy-DiagnosticArchive $files (Join-Path $DataRoot ('archive\'+$Module)) $Limits)
-    return @{status=if($scan.issues.Count -or $scan.limited -or @($rows|Where-Object status -NE 'archived').Count){'partial'}else{'ok'};data=@{discovered=$files.Count;scanLimited=$scan.limited;files=$rows};issues=$scan.issues}
+    $qualityIssues=@($rows|Where-Object {$_.validation -and $_.validation.status -ne 'structure-checked'}|ForEach-Object {@{source=$_.source;status=$_.validation.status;reason=$_.validation.reason;bytesPreserved=$true}})
+    return @{status=if($scan.issues.Count -or $scan.limited -or @($rows|Where-Object status -NE 'archived').Count -or $qualityIssues.Count){'partial'}else{'ok'};data=@{discovered=$files.Count;scanLimited=$scan.limited;files=$rows};issues=@($scan.issues)+$qualityIssues}
 }
 function Get-LogSpaceEvidence($DataRoot,$Limits) {
     $drive=[IO.DriveInfo]::new([IO.Path]::GetPathRoot($DataRoot))

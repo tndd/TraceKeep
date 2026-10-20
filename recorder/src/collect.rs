@@ -197,7 +197,7 @@ struct Process {
     write_transfer_count: Option<u64>,
 }
 
-fn date_millis(value: &str) -> Result<i64, String> {
+pub(crate) fn date_millis(value: &str) -> Result<i64, String> {
     if value.len() != 25 || !value.is_ascii() {
         return Err("Unexpected WMI datetime".into());
     }

@@ -157,9 +157,12 @@ while(-not(Test-Path (Join-Path (Split-Path $LogRoot) 'STOP-ALL'))){
                 }
                 $restarted=@($runtime.workers|Where-Object {$_.name -eq 'module-performance' -and $_.recentRestarts -ge 1}).Count -eq 1
             }
-            if($coverage.modules.performance.status -eq 'unavailable' -and $coverage.modules.processes.status -eq 'ok'){$seenGap=$true}
+            # A one-second healthy worker can be observed during its durable
+            # collecting/complete transition. Its completed records and cadence
+            # are independently required below; don't rely on timer phase.
+            if($coverage.modules.performance.status -eq 'unavailable' -and $coverage.modules.processes.status -in @('ok','collecting')){$seenGap=$true}
         }while(-not($restarted -and $seenGap) -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
-        Assert ($restarted -and $seenGap) ('Hung module not isolated/restarted: '+(Get-Content (Join-Path $sandbox 'stderr.txt') -Raw))
+        Assert ($restarted -and $seenGap) ('Hung module not isolated/restarted: restarted='+$restarted+' gap='+$seenGap+' coverage='+($coverage|ConvertTo-Json -Depth 6 -Compress)+' '+(Get-Content (Join-Path $sandbox 'stderr.txt') -Raw))
         $rows=@(Get-Content (Join-Path $logs ('detail-processes-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
         Assert ($rows.Count -ge 8) 'Fast provider starved by hung provider'
         $gaps=for($i=1;$i -lt $rows.Count;$i++){([DateTimeOffset]$rows[$i].startedAt-[DateTimeOffset]$rows[$i-1].startedAt).TotalSeconds}

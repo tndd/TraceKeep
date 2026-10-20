@@ -42,7 +42,7 @@ foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
     if($module -eq 'inventory'){
         foreach($key in @('board','bios','cpu','memory','drivers','devices','disks','os','updates')){
             if(-not $reference.data.Contains($key)){continue}
-            $actual=@($row.result.data.$key);$expected=@($reference.data[$key]|ConvertTo-Json -Depth 8|ConvertFrom-Json)
+            $actual=@($row.result.data.$key);$expected=ConvertFrom-Json -InputObject (ConvertTo-Json -InputObject @($reference.data[$key]) -Depth 8);$expected=@($expected)
             # Match by stable row identity; provider ordering is not contractual.
             Assert ($actual.Count -eq $expected.Count) ('Inventory row count changed: '+$key)
             if($actual.Count){

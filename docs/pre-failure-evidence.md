@@ -240,8 +240,8 @@ compression, conflicts, malformed XML, stale coverage, bounded results and nativ
 helper failure/output limits. Native unit-test failures explicitly stop CI before
 the release-build command can mask them.
 
-Remaining boundaries are CPU/board sensors (LibreHardwareMonitor/PawnIO), activity
-(legacy collector coordination and paired progress), storage (Windows reliability
+Remaining boundaries are CPU/board sensors (LibreHardwareMonitor/PawnIO),
+storage (Windows reliability
 and NVMe IOCTL contracts), event recovery/incident capture, dump/WER preservation,
 and the coordinator. These require provider or recovery/failure tests of their
 own; they are not consolidated into another collector to reduce process count.
@@ -254,3 +254,34 @@ malformed/oversized-line recovery. The reference cache is bounded by 32 MiB of
 serialized data as well as 64 entries, independently of the output-row budget.
 Tests cover large raw/gzip records, unchanged references, subsequent valid rows
 after an oversized line and cache replacement/eviction accounting.
+
+
+## Native aggregate activity and workspace reads
+
+The activity sampler is also an independent Rust process (12 of 18 workers).
+It acquires both the current global and first-generation per-user named mutexes
+before accessing providers, plus a per-root owner lock. Its `sessions`, `activity`,
+`progress-activity` and fatal `errors` JSONL remain compatible. Aggregate CPU,
+memory (cached for five iterations), disk and NVIDIA CSV fields retain nulls,
+string-valued GPU counters and unsupported-field lists. Settings and legacy
+millisecond interval overrides retain their 1–5 second bounds. NVIDIA helpers
+use the existing bounded kill-on-close job; WMI stalls remain isolated under
+the supervisor. Progress precedes providers and points only to a successful
+same-day durable append. A restart has a new session, and torn tails retain
+their original bytes. The fallback PowerShell collector remains packaged.
+`Test-RustActivity.ps1` runs on an isolated host: it must not stop a production
+collector to acquire the legacy mutexes.
+
+The detailed workspace previously requested every full history stream, even
+though its model immediately discarded unused rows. The workspace query now
+requests its eight displayed streams, transports process history as the last
+two samples with complete count/time/gap metadata, selects the last available
+GPU XML sample, and uses a lossless metadata catalog for sensor rows. There is
+no sensor decimation. Full `pcdiag history` and on-disk data are unchanged;
+`pcdiag workspace-history START END` exposes the presentation transport for
+validation. Projection is explicit in stream metadata, and existing read-limit
+warnings remain on requested streams. The frontend parses event XML once per
+shown group and GPU XML once per view, retaining all event records for inspection.
+A missing histogram palette caused the CPU/GPU comparison exception; rendering
+regressions now exercise distribution, scatter and evolution with data and empty
+periods, alongside catalog/model parity.

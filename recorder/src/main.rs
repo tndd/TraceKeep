@@ -409,6 +409,12 @@ fn main() {
         }
     };
     if let Err(error) = run(&options) {
+        if options.module == "activity" {
+            let _ = storage::append(
+                &options.logs.join(format!("errors-{}.jsonl", day())),
+                &json!({"time":now(),"error":error,"pid":std::process::id(),"runId":options.run_id}),
+            );
+        }
         // Best effort only: an unwritable disk must not be reported as success.
         let _ = storage::snapshot(
             &options

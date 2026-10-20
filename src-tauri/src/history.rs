@@ -37,8 +37,10 @@ fn project_workspace(key:&str,stream:&mut Value){
     let mut summary=Value::Null;
     if let Some(rows)=stream["rows"].as_array_mut(){
         let original=rows.len();
-        if key=="processes"{
+        if matches!(key,"processes"|"gpuDetails"){
             rows.sort_by_key(|r|r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis()));
+        }
+        if key=="processes" && original>0{
             let times=rows.iter().filter_map(|r|r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis())).collect::<Vec<_>>();
             summary=json!({"count":original,"first":rows.first().map(|r|&r["time"]),"last":rows.last().map(|r|&r["time"]),"maxGap":times.windows(2).map(|w|w[1]-w[0]).max().map(|n|n as f64/1000.)});
         }
@@ -56,7 +58,7 @@ fn project_workspace(key:&str,stream:&mut Value){
                         if let Some(object)=metadata.as_object_mut(){object.remove("value");}else{continue;}
                         let identity=metadata.to_string();
                         let index=*indices.entry(identity).or_insert_with(||{let index=catalog.len();catalog.push(metadata);index});
-                        *sensor=json!([index,sensor["value"]]);
+                        *sensor=match sensor.get("value"){Some(value)=>json!([index,value]),None=>json!([index])};
                     }
                 }
             }
@@ -136,12 +138,12 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  use std::io::Write;
  use flate2::{write::GzEncoder,Compression};
  #[test]fn workspace_projection_preserves_sensor_identity_and_process_coverage(){
-  let sensors=json!([{"id":"same","name":"Temperature","hardware":"synthetic","type":"Temperature","value":60,"available":true},{"id":"same","name":"Temperature","hardware":"other","type":"Temperature","value":null,"available":false}]);
+  let sensors=json!([{"id":"same","name":"Temperature","hardware":"synthetic","type":"Temperature","value":60,"available":true},{"id":"same","name":"Temperature","hardware":"other","type":"Temperature","value":null,"available":false},{"name":"missing-value","type":"Temperature"}]);
   let mut stream=json!({"rows":[{"time":"2026-01-01T00:00:00Z","sensors":sensors},{"time":"2026-01-01T00:00:01Z","sensors":sensors}],"truncated":true,"invalidLines":2});
   let original=stream.clone();project_workspace("cpu",&mut stream);
-  assert_eq!(stream["sensorCatalog"].as_array().unwrap().len(),2);
+  assert_eq!(stream["sensorCatalog"].as_array().unwrap().len(),3);
   let mut restored=stream["rows"].clone();
-  for row in restored.as_array_mut().unwrap(){for cell in row["sensors"].as_array_mut().unwrap(){let mut sensor=stream["sensorCatalog"][cell[0].as_u64().unwrap() as usize].clone();sensor["value"]=cell[1].clone();*cell=sensor;}}
+  for row in restored.as_array_mut().unwrap(){for cell in row["sensors"].as_array_mut().unwrap(){let mut sensor=stream["sensorCatalog"][cell[0].as_u64().unwrap() as usize].clone();if cell.as_array().unwrap().len()>1{sensor["value"]=cell[1].clone();}*cell=sensor;}}
   assert_eq!(restored,original["rows"]);assert_eq!(stream["truncated"],true);assert_eq!(stream["invalidLines"],2);
   let mut process=json!({"rows":[{"time":"2026-01-01T00:00:00Z","sequence":0},{"time":"2026-01-01T00:00:30Z","sequence":1},{"time":"2026-01-01T00:02:00Z","sequence":2}]});
   project_workspace("processes",&mut process);

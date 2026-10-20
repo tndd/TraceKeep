@@ -7,7 +7,7 @@ export const emptyHealth=()=>({counters:{},temperatureC:null,percentageUsed:null
 export function buildModel(raw){
  const start=Date.parse(raw.start),end=Date.parse(raw.end),t=r=>(Date.parse(typeof r==='string'?r:r.time)-start)/60000;
  const rows=k=>(raw.streams?.[k]?.rows||[]).filter(r=>Number.isFinite(t(r))).sort((a,b)=>t(a)-t(b));
- const sensorRows=k=>rows(k).map(r=>raw.streams[k].sensorEncoding==='catalog-v1'?{...r,sensors:r.sensors?.map(s=>Array.isArray(s)?{...raw.streams[k].sensorCatalog[s[0]],value:s[1]}:s)}:r);
+ const sensorRows=k=>rows(k).map(r=>raw.streams[k].sensorEncoding==='catalog-v1'?{...r,sensors:r.sensors?.map(s=>Array.isArray(s)?{...raw.streams[k].sensorCatalog[s[0]],...(s.length>1?{value:s[1]}:{})}:s)}:r);
  const cpu=sensorRows('cpu'),board=sensorRows('board'),activity=rows('activity'),perf=rows('performance'),pro=rows('processes');
  const E={start,end,period:new Date(start).toLocaleString()+' — '+new Date(end).toLocaleString(),cpu:[],board:[],gpu:[],io:[],performance:[],storage:[],events:[],eventLevels:{},eventTotal:0,boardSensors:board.at(-1)?.sensors||[],gpuDetail:{name:'未取得',vramUsed:'—',time:'',driver:'—'}};
  E.cpu=cpu.map(r=>({t:t(r),time:r.time,session:r.session,temp:sensor(r,'Core (Tctl/Tdie)','Temperature'),ccd:sensor(r,'CCD1 (Tdie)','Temperature'),load:sensor(r,'CPU Total','Load'),power:sensor(r,'Package','Power'),effective:sensor(r,'Cores (Average Effective)','Clock'),clock:sensor(r,'Cores (Average)','Clock'),cores:(r.sensors||[]).filter(s=>s.type==='Load'&&/^CPU Core #\d+$/.test(s.name)).map(s=>num(s.value))}));

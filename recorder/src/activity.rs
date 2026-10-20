@@ -125,8 +125,11 @@ impl Log {
     }
     fn commit(&mut self, row: &Value) -> io::Result<()> {
         let (file, offset) = self.append("activity", row)?;
+        self.previous_day = file
+            .trim_start_matches("activity-")
+            .trim_end_matches(".jsonl")
+            .to_owned();
         self.previous = json!({"file":file,"offset":offset,"time":crate::now()});
-        self.previous_day = crate::day();
         Ok(())
     }
 }

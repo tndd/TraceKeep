@@ -121,6 +121,22 @@ function Write-DiagnosticLogLine($Handle,[string]$Line) {
     $Handle.writer.WriteLine($Line)
     $Handle.writer.Flush()
     $Handle.writer.BaseStream.Flush($true)
+    # Advance only after the OS has acknowledged the flush. This is a boundary
+    # for correlation, not a guarantee against a device ignoring flush requests.
+    $Handle.lastCommit=@{file=[IO.Path]::GetFileName($Handle.writer.BaseStream.Name);offset=$Handle.writer.BaseStream.Position;time=[DateTimeOffset]::Now.ToString('o')}
+}
+function Write-DiagnosticProgress($Root,[string]$Name,[string]$Session,[long]$Sequence,$PreviousWriter=$null,[string]$Stage='collecting') {
+    $row=@{time=[DateTimeOffset]::Now.ToString('o');session=$Session;sequence=$Sequence;stage=$Stage;monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;previousCommit=if($PreviousWriter){$PreviousWriter.lastCommit}else{$null}}
+    $handle=Open-DiagnosticLogWriter (Join-Path $Root ('progress-'+$Name+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))
+    try {Write-DiagnosticLogLine $handle ($row|ConvertTo-Json -Compress -Depth 6)}finally{Close-DiagnosticLogWriter $handle}
+}
+function Save-DiagnosticJson($Path,$Value) {
+    $temp=$Path+'.tmp'
+    $json=if($null -eq $Value){'null'}else{ConvertTo-Json -InputObject $Value -Depth 16}
+    $bytes=([Text.UTF8Encoding]::new($false)).GetBytes($json)
+    $stream=[IO.FileStream]::new($temp,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
+    try {$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
+    if(Test-Path -LiteralPath $Path){[IO.File]::Replace($temp,$Path,$Path+'.previous')}else{[IO.File]::Move($temp,$Path)}
 }
 function Close-DiagnosticLogWriter($Handle) {
     if($Handle){try {$Handle.writer.Dispose()}finally{$Handle.gate.Dispose()}}

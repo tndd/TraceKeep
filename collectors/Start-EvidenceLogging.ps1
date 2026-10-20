@@ -1,9 +1,9 @@
-param([Parameter(Mandatory=$true)][string]$LogRoot,[int]$MaxSamples=0)
+param([Parameter(Mandatory=$true)][string]$LogRoot,[int]$MaxSamples=0,[string]$SettingsPath)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Evidence-Core.ps1')
 . (Join-Path $PSScriptRoot 'Collection-Settings.ps1')
 $dataRoot=Split-Path $LogRoot
-$config=Get-CollectionSettings $dataRoot
+$config=Get-CollectionSettings $dataRoot -SettingsPath $SettingsPath
 $stateRoot=Join-Path $dataRoot 'event-checkpoints'
 [void][IO.Directory]::CreateDirectory($stateRoot)
 $mutex=[Threading.Mutex]::new($false,'Global\PCDiagnostics-Evidence-v1');$locked=$false
@@ -18,10 +18,9 @@ try {
     $channels=@($channels|Select-Object -Unique)
     if(-not $config.modules.events.enabled){$channels=@()}
     Save-EvidenceJson (Join-Path $dataRoot 'event-channel-coverage.json') @{time=[DateTimeOffset]::Now.ToString('o');enabled=$config.modules.events.enabled;selected=$channels;catalog=$catalog;note='Disabled Windows channels are catalogued, not enabled. Analytic/debug ETW sessions are not started.'}
-    $crash=if($config.modules.crashConfiguration.enabled){Get-CrashConfiguration $dataRoot}else{@{status='disabled'}}
-    if($config.modules.inventory.enabled){Save-EvidenceJson (Join-Path $dataRoot 'machine-inventory.json') (Get-MachineEvidence)}
+    $crash=@{status='pending'}
     $boot=(Get-CimInstance Win32_OperatingSystem).LastBootUpTime
-    $session=[guid]::NewGuid().ToString();$iteration=0;$nextHealth=[DateTimeOffset]::MinValue;$nextCrash=[DateTimeOffset]::MinValue;$nextEvents=[DateTimeOffset]::MinValue;$bundlePending=$config.modules.incidents.enabled;$lastRecovery=@()
+    $session=[guid]::NewGuid().ToString();$iteration=0;$nextEvents=[DateTimeOffset]::MinValue;$bundlePending=$config.modules.incidents.enabled;$lastRecovery=@()
     Add-EvidenceRecord $LogRoot 'evidence' @{time=[DateTimeOffset]::Now.ToString('o');event='evidence-start';session=$session;channels=$channels;eventIntervalSeconds=15;storageIntervalSeconds=300;initialLookbackDays=7}
     while(-not(Test-Path -LiteralPath (Join-Path $LogRoot 'STOP-EVIDENCE'))){
         $timer=[Diagnostics.Stopwatch]::StartNew();$errors=@();$recovery=@()
@@ -32,16 +31,11 @@ try {
             }
             $lastRecovery=$recovery;$lastEventErrors=$errors;$nextEvents=[DateTimeOffset]::Now.AddSeconds($config.modules.events.intervalSeconds)
         }else{$recovery=$lastRecovery;$errors=@($lastEventErrors)}
-        if([DateTimeOffset]::Now -ge $nextHealth){
-            Add-EvidenceRecord $LogRoot 'storage' (Get-StorageEvidence $config)
-            $seconds=(@('storage','nvme','nvmeErrors')|Where-Object {$config.modules[$_].enabled}|ForEach-Object {$config.modules[$_].intervalSeconds}|Measure-Object -Minimum).Minimum
-            $nextHealth=[DateTimeOffset]::Now.AddSeconds($(if($seconds){$seconds}else{300}))
-        }
-        if($config.modules.crashConfiguration.enabled -and [DateTimeOffset]::Now -ge $nextCrash){
-            $crash=Get-CrashConfiguration $dataRoot;Save-EvidenceJson (Join-Path $dataRoot 'crash-configuration.json') $crash;$nextCrash=[DateTimeOffset]::Now.AddSeconds($config.modules.crashConfiguration.intervalSeconds)
-        }
         # Wait for boot events to settle before saving one immutable snapshot per boot.
         if($bundlePending -and $boot -and ([DateTimeOffset]::Now-([DateTimeOffset]$boot)).TotalSeconds -ge 90){
+            # The isolated worker owns the snapshot. Do not block event recovery
+            # on CIM, disk metadata or dump enumeration.
+            try {$crash=Get-Content -LiteralPath (Join-Path $dataRoot 'crash-configuration.json') -Encoding UTF8 -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop}catch{$crash=@{status='unavailable';error=$_.Exception.Message}}
             try {$bundle=New-IncidentBundle $LogRoot $dataRoot $boot $crash;$bundlePending=$false;Add-EvidenceRecord $LogRoot 'evidence' @{time=[DateTimeOffset]::Now.ToString('o');event='boot-bundle-created';path=$bundle}}catch{$errors+=@{error=$_.Exception.Message}}
         }
         Add-EvidenceRecord $LogRoot 'evidence' @{time=[DateTimeOffset]::Now.ToString('o');monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;event='heartbeat';session=$session;sequence=$iteration;sampleDurationMs=$timer.ElapsedMilliseconds;channels=$recovery;eventsStatus=if($config.modules.events.enabled){'enabled'}else{'disabled'};collectionSettings=$config.modules;errors=$errors}

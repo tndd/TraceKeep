@@ -14,9 +14,11 @@ $source=$source.Replace('Global\PCDiagnostics-Coordinator-v1',('Local\PCDiagnost
 [IO.File]::WriteAllText((Join-Path $testRoot 'management\Run-Recorder.ps1'),$source,$utf8)
 foreach($e in @(@('Start-AutomaticCpuLogging.ps1','cpu-auto'),@('Start-MotherboardLogging.ps1','board-auto'),@('Start-ContinuousDiagnostics.ps1','activity'),@('Start-EvidenceLogging.ps1','evidence'),@('Start-ExtendedLogging.ps1','extended'),@('Start-LogMaintenance.ps1','maintenance'))){
     $fake=@'
-param([string]$LogRoot,[string]$LibraryDirectory,[int]$IntervalMilliseconds)
-$path=Join-Path $LogRoot ('PREFIX-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
+param([string]$LogRoot,[string]$LibraryDirectory,[int]$IntervalMilliseconds,[string]$Module,[string]$RunId,[string]$SettingsPath)
+$prefix=if($Module){'module-'+$Module}else{'PREFIX'}
+$path=Join-Path $LogRoot ($prefix+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')
 $row=@{time=[DateTimeOffset]::Now.ToString('o');session='simulation';sequence=0;errors=@();gpu=@(@{temperatureC='50'});sensors=@(@{type='Temperature';value=50},@{type='Voltage';available=$true;value=12})}|ConvertTo-Json -Compress -Depth 5
+if($prefix -eq 'maintenance'){$row=$row.Replace('"errors":[]','"errors":[{"error":"synthetic provider failure before exit"}]')}
 [IO.File]::AppendAllText($path,$row+"`n",[Text.UTF8Encoding]::new($false))
 # Exit deliberately: the coordinator should relaunch this simulated worker.
 '@
@@ -27,8 +29,10 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 6}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
+    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 18}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
+    $failedRows=@(Get-Content (Join-Path $logRoot ('maintenance-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
+    if(-not $failedRows[-1].errors.Count){throw 'Error-before-exit restart regression fixture was not exercised'}
     [IO.File]::WriteAllText((Join-Path $dataRoot 'STOP-ALL'),'test stop',$utf8)
     if(-not $proc.WaitForExit(15000)){throw 'Supervisor did not stop'}
     if($proc.ExitCode -ne 0){throw ('Supervisor failed: '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}

@@ -11,7 +11,7 @@ pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
     let b=DateTime::parse_from_rfc3339(end).map_err(|_|"Invalid end timestamp")?.timestamp_millis();
     if b<=a||b-a>7_200_000{return Err("Select a positive range of at most two hours".into());}
     let mut streams=BTreeMap::new();
-    for (key,prefix,sensor) in [("cpu","cpu-auto-",true),("board","board-auto-",true),("activity","activity-",false),("events","events-",false),("performance","detail-performance-",false),("processes","detail-processes-",false),("gpuDetails","detail-gpuDetails-",false),("storage","storage-",false)]{
+    for (key,prefix,sensor) in [("cpu","cpu-auto-",true),("board","board-auto-",true),("activity","activity-",false),("events","events-",false),("performance","detail-performance-",false),("processes","detail-processes-",false),("gpuDetails","detail-gpuDetails-",false),("storage","storage-",false),("configurationJournal","detail-configurationJournal-",false),("crashConfigurationHistory","detail-crashConfiguration-",false),("collectorHealth","extended-",false),("cpuProgress","progress-cpu-",true),("boardProgress","progress-board-",true),("activityProgress","progress-activity-",false)]{
         streams.insert(key,read_stream(if sensor{&sources.sensor_root}else{&sources.activity_root},prefix,a,b));
     }
     let read_json=|name:&str|fs::read(machine_dir().join(name)).ok().and_then(|x|serde_json::from_slice::<Value>(&x).ok()).unwrap_or(Value::Null);
@@ -78,6 +78,25 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  fn gzip(path:&Path,bytes:&[u8]) {
   let mut encoder=GzEncoder::new(fs::File::create(path).unwrap(),Compression::default());
   encoder.write_all(bytes).unwrap();encoder.finish().unwrap();
+ }
+ #[test]fn pre_failure_journal_and_progress_are_queryable_after_compression(){
+  let dir=std::env::temp_dir().join(format!("tracekeep-prefailure-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
+  let sources=Sources{sensor_root:dir.clone(),activity_root:dir.clone()};
+  let t=Local::now();let day=t.format("%Y%m%d");
+  for (key,prefix) in [("configurationJournal","detail-configurationJournal-"),("crashConfigurationHistory","detail-crashConfiguration-"),("collectorHealth","extended-"),("cpuProgress","progress-cpu-"),("boardProgress","progress-board-"),("activityProgress","progress-activity-")]{
+   let original=json!({"time":t.to_rfc3339(),"sha256":"synthetic","result":{"data":{"dumpMode":7}},"session":"test","sequence":0,"previousCommit":{"offset":123}});
+   let repeated=json!({"time":t.to_rfc3339(),"sha256":"synthetic","unchanged":true,"session":"test","sequence":1});
+   let bytes=format!("{original}\n{repeated}\n");
+   let path=dir.join(format!("{prefix}{day}.jsonl"));
+   fs::write(&path,&bytes).unwrap();
+   let raw=query(&sources,&t.to_rfc3339(),&(t+chrono::Duration::seconds(1)).to_rfc3339()).unwrap();
+   assert_eq!(raw["streams"][key]["rows"][1]["result"]["data"]["dumpMode"],7);
+   assert_eq!(raw["streams"][key]["rows"][0]["previousCommit"]["offset"],123);
+   gzip(&path.with_extension("jsonl.gz"),bytes.as_bytes());fs::remove_file(&path).unwrap();
+   let archived=query(&sources,&t.to_rfc3339(),&(t+chrono::Duration::seconds(1)).to_rfc3339()).unwrap();
+   assert_eq!(archived["streams"][key],raw["streams"][key]);
+  }
+  fs::remove_dir_all(dir).unwrap();
  }
  #[test]fn detailed_history_keeps_intermediate_samples_and_reports_real_limits(){
   let dir=std::env::temp_dir().join(format!("tracekeep-complete-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();

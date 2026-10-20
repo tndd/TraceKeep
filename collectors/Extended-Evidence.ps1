@@ -4,13 +4,14 @@ function Get-ExtendedNextDeadline([double]$DueMs,[double]$CompletedMs,[double]$I
     $missed=if($next -lt $CompletedMs){[Math]::Ceiling(($CompletedMs-$next)/$IntervalMs)}else{0}
     return @{nextMs=($next+$missed*$IntervalMs);missedIntervals=[long]$missed}
 }
-function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[DateTimeOffset]$Started,[long]$DurationMs,[DateTimeOffset]$Now=[DateTimeOffset]::Now,$Schedule=$null) {
+function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[DateTimeOffset]$Started,[long]$DurationMs,[DateTimeOffset]$Now=[DateTimeOffset]::Now,$Schedule=$null,[string]$Session,[long]$Sequence=0) {
     $json=$Result|ConvertTo-Json -Depth 12 -Compress
     $sha=[Security.Cryptography.SHA256]::Create()
     try {$hash=([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($json)))).Replace('-','')}finally{$sha.Dispose()}
     $day=$Now.LocalDateTime.ToString('yyyyMMdd')
     $unchanged=$Hashes.ContainsKey($Name) -and $Hashes[$Name].day -eq $day -and $Hashes[$Name].hash -eq $hash
     $record=@{time=$Now.ToString('o');startedAt=$Started.ToString('o');monotonicTicks=[Diagnostics.Stopwatch]::GetTimestamp();monotonicFrequency=[Diagnostics.Stopwatch]::Frequency;module=$Name;durationMs=$DurationMs;status=$Result.status;sha256=$hash;unchanged=$unchanged}
+    if($Session){$record.session=$Session;$record.sequence=$Sequence}
     if($Schedule){$record.schedule=$Schedule}
     if(-not $unchanged){$record.result=$Result}
     # Filename and reference scope use the same captured date, including midnight.
@@ -18,6 +19,68 @@ function Add-ExtendedResult($LogRoot,[string]$Name,$Result,[hashtable]$Hashes,[D
     Add-EvidenceRecord $LogRoot ('detail-'+$Name) $record -Day $day
     $Hashes[$Name]=@{day=$day;hash=$hash}
     return $record
+}
+function Read-ConfigurationEvidenceFile([string]$Path) {
+    if(-not [IO.File]::Exists($Path)){return [ordered]@{status='missing'}}
+    try {
+        $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            if($stream.Length -gt 262144){return [ordered]@{status='too-large';bytes=$stream.Length;limitBytes=262144}}
+            $buffer=New-Object byte[] 262145;$count=0
+            while($count -lt $buffer.Length -and ($n=$stream.Read($buffer,$count,$buffer.Length-$count)) -gt 0){$count+=$n}
+            if($count -gt 262144){return [ordered]@{status='too-large';limitBytes=262144}}
+            $bytes=New-Object byte[] $count;[Array]::Copy($buffer,$bytes,$count)
+        }finally{$stream.Dispose()}
+        $sha=[Security.Cryptography.SHA256]::Create()
+        try {$hash=[BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-','')}finally{$sha.Dispose()}
+        $text=([Text.UTF8Encoding]::new($false,$true)).GetString($bytes).TrimStart([char]0xfeff)
+        try {$null=ConvertFrom-Json -InputObject $text -ErrorAction Stop}
+        catch {return [ordered]@{status='invalid';sha256=$hash;bytes=$count;error='Invalid JSON; source left unchanged'}}
+        # Keep exact JSON text, avoiding truncation of nested settings by the
+        # outer journal serializer. Whitespace-only edits are observations too.
+        return [ordered]@{status='observed';sha256=$hash;bytes=$count;json=$text}
+    }catch{return [ordered]@{status='unavailable';error=$_.Exception.Message}}
+}
+function Get-ConfigurationJournalEvidence([string]$DataRoot) {
+    $files=[ordered]@{};$issues=@()
+    foreach($name in @('collection-settings.json','recorder-settings.json','sensor-driver-isolation.json','dump-policy-backup.json','event-channel-coverage.json','recorder-run.json')){
+        $files[$name]=Read-ConfigurationEvidenceFile (Join-Path $DataRoot $name)
+        if($files[$name].status -in @('invalid','unavailable','too-large')){$issues+=@{source=$name;status=$files[$name].status}}
+    }
+    try {
+        $registry=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\CrashControl' -ErrorAction Stop
+        $dump=[ordered]@{status='observed';values=[ordered]@{}}
+        foreach($key in @('CrashDumpEnabled','DumpFile','MinidumpDir','AutoReboot','LogEvent','AlwaysKeepMemoryDump','DedicatedDumpFile','DumpFileSize')){
+            $dump.values[$key]=[ordered]@{present=($key -in $registry.PSObject.Properties.Name);value=$registry.$key}
+        }
+    }catch{$dump=[ordered]@{status='unavailable';error=$_.Exception.Message};$issues+=@{source='CrashControl';status='unavailable'}}
+    return [ordered]@{status=if($issues.Count){'partial'}else{'ok'};data=[ordered]@{files=$files;crashControl=$dump;timeScope='Observed at sampling time; changes between polls may be missed. recorder-run.json describes coordinator-applied settings; saved settings may await restart.'};issues=$issues}
+}
+function Save-CollectionModuleState($LogRoot,$Name,$RunId,$Session,$State) {
+    $State.time=[DateTimeOffset]::Now.ToString('o');$State.runId=$RunId;$State.session=$Session;$State.pid=$PID
+    $State.event='heartbeat';$State.enabled=$true
+    $State.errors=@(if($State.status -eq 'error'){@{module=$Name;error=$State.error}})
+    # Publish durable history before the replaceable current view.
+    Add-EvidenceRecord $LogRoot ('module-'+$Name) $State
+    $directory=Join-Path (Split-Path $LogRoot) 'module-state'
+    [void][IO.Directory]::CreateDirectory($directory)
+    Save-EvidenceJson (Join-Path $directory ($Name+'.json')) $State
+}
+function Get-CollectionCoverage($DataRoot,$Config,$RunId) {
+    $state=[ordered]@{};$errors=@()
+    foreach($name in Get-IsolatedCollectionModules){
+        if(-not(Test-CollectionModuleEnabled $Config $name)){$state[$name]=@{status='disabled';enabled=$false};continue}
+        $value=$null
+        try {
+            $value=Get-Content -LiteralPath (Join-Path $DataRoot ('module-state\'+$name+'.json')) -Encoding UTF8 -Raw -ErrorAction Stop|ConvertFrom-Json -ErrorAction Stop
+            if($value.runId -ne $RunId){throw 'No observation from this recorder run'}
+            $age=([DateTimeOffset]::Now-[DateTimeOffset]$value.time).TotalSeconds
+            if($age -lt -5 -or $age -gt 45){throw 'Module heartbeat is stale'}
+        }catch{$value=@{status='unavailable';enabled=$true;error=$_.Exception.Message}}
+        $state[$name]=$value
+        if($value.status -in @('error','unavailable','pending')){$errors+=@{module=$name;error=$value.error;status=$value.status}}
+    }
+    return @{time=[DateTimeOffset]::Now.ToString('o');event='heartbeat';runId=$RunId;modules=$state;errors=$errors}
 }
 function Read-DiagnosticClass($Class,$Properties,$Namespace='root/cimv2',$Filter) {
     $args=@{ClassName=$Class;Namespace=$Namespace;ErrorAction='Stop';OperationTimeoutSec=8}

@@ -46,7 +46,7 @@ function Get-ExtendedEvidence {param($Module);Start-Sleep -Milliseconds 200;retu
 '@
     $text=$text.Replace('$dataRoot=Split-Path $LogRoot',($stubs+"`r`n"+'$dataRoot=Split-Path $LogRoot'))
     [IO.File]::WriteAllText($path,$text)
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path -LogRoot $logs -MaxSamples 2
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $path -LogRoot $logs -Module performance -MaxSamples 2
     Assert ($LASTEXITCODE -eq 0) 'Isolated scheduler failed'
     $rows=@(Get-Content (Join-Path $logs ('detail-performance-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
     Assert ($rows.Count -eq 2) 'Expected two scheduled samples'

@@ -36,6 +36,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Evidence.ps1
       - name: Durable append and daily gzip storage
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-LogStorage.ps1
+      - name: Pre-failure configuration, worker isolation and forced termination
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-PreFailureEvidence.ps1
       - name: NVMe health decoder and read-only request bounds
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-NvmeHealth.ps1
       - name: Extended collection, opt-out and archive integrity

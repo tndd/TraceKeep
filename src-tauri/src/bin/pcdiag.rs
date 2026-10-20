@@ -97,7 +97,7 @@ fn run()->Result<i32,String>{
         let extended_ok=v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().any(|w|w["name"]=="extended"&&w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0)));
         if command=="doctor"{v["coverage"]=read_json(machine_dir().join("coverage.json"));}
         let maintenance_ok=v["coordinator"]["runtime"]["workers"].as_array().is_some_and(|a|a.iter().filter(|w|w["name"]=="maintenance").all(|w|w["state"]=="recording"&&w["errorCount"].as_u64()==Some(0)));
-        let ok=healthy(&v) && (command!="doctor" || (evidence_healthy(&v) && extended_ok && maintenance_ok && v["coordinator"]["configured"]==true && v["coordinator"]["heartbeatAgeSeconds"].as_i64().is_some_and(|age|(0..=10).contains(&age))));
+        let ok=healthy(&v) && (command!="doctor" || (evidence_healthy(&v) && extended_ok && maintenance_ok && diagnostics_core::recorder_status::summary(&v["coordinator"])["state"]=="recording"));
         if args.iter().any(|a|a=="--json"){println!("{}",serde_json::to_string(&v).unwrap());}else{display(&v);if command=="doctor"{println!("Unified configuration: {}\nCoordinator heartbeat age: {}s\nWorkers: {}\nCoverage (partial/unavailable is not healthy hardware): {}",v["coordinator"]["configured"],v["coordinator"]["heartbeatAgeSeconds"],v["coordinator"]["runtime"]["workers"],v["coverage"]["modules"]);}}
         if command!="watch"{return Ok(if ok{0}else{2});}
         std::thread::sleep(Duration::from_secs(2));

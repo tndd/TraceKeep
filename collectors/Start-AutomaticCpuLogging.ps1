@@ -34,10 +34,12 @@ try {
     $computer = [LibreHardwareMonitor.Hardware.Computer]::new()
     $computer.IsCpuEnabled = $true
     # CPU only: do not change fan control or add a second motherboard/SMART poller.
-    $computer.Open()
     $session = [guid]::NewGuid().ToString()
+    if(-not $Probe){Write-DiagnosticProgress $root 'cpu' $session $sample $writer -Stage 'initializing'}
+    $computer.Open()
     while (-not (Test-Path -LiteralPath (Join-Path $root 'STOP-CPU'))) {
         $clock = [Diagnostics.Stopwatch]::StartNew()
+        if(-not $Probe){Write-DiagnosticProgress $root 'cpu' $session $sample $writer}
         $readings = @($computer.Hardware | ForEach-Object { Collect-Sensors $_ })
         $temperatures = @($readings | Where-Object { $_.type -eq 'Temperature' -and $_.value -gt 0 -and $_.value -lt 150 })
         if ($temperatures.Count -eq 0) { throw 'No usable CPU temperature was obtained. Automatic CPU logging has not been verified.' }

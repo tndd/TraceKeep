@@ -13,10 +13,12 @@ changing external dump settings, or deleting unusable evidence.
 - Extended collection uses monotonic deadlines and sleeps until the earliest
   due module (at most 15 seconds between idle heartbeats). Provider duration
   no longer shifts every deadline to completion plus the configured interval.
-  Slow work can still delay other modules in this serial worker. Actual start
+  Actual start
   interval, deadline lateness and skipped intervals are recorded, and expired
   slots are skipped without catch-up bursts. This is not a hard real-time
-  scheduler or a new set of hardware collectors.
+  scheduler or a new set of hardware collectors. The subsequent
+  [pre-failure evidence change](pre-failure-evidence.md) separates the modules
+  into independently supervised processes.
 - An active dump-policy receipt is compared with current registry values.
   External changes/missing values return `drifted`, not `already-configured`.
   Comparison is read-only and preserves the original rollback receipt.

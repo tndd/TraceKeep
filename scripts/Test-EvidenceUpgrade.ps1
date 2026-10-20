@@ -1,7 +1,7 @@
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot
 $utf8=[Text.UTF8Encoding]::new($false)
-foreach($mode in @('success','failure','evidence-error','storage-missing')){
+foreach($mode in @('success','failure','evidence-error','storage-missing','coverage-incomplete')){
     $root=Join-Path $env:TEMP ('pcdiag-update-simulation-'+[guid]::NewGuid().ToString('N'))
     $codeRoot=Join-Path $root 'installed';$dataRoot=Join-Path $root 'data';$package=Join-Path $root 'package'
     foreach($dir in @($codeRoot,$dataRoot,(Join-Path $dataRoot 'logs'),(Join-Path $codeRoot 'management'),(Join-Path $codeRoot 'collectors'),(Join-Path $package 'management'),(Join-Path $package 'collectors'))){[void][IO.Directory]::CreateDirectory($dir)}
@@ -22,14 +22,16 @@ foreach($mode in @('success','failure','evidence-error','storage-missing')){
         'param([string]$Action);if($Action -eq "start"){$root="'+$dataRoot+'";$row=@{time=[DateTimeOffset]::Now.ToString("o");event="heartbeat";channels=@(@{channel="System";watermark=123});errors=@()}|ConvertTo-Json -Compress -Depth 5;[IO.File]::WriteAllText((Join-Path $root ("logs\evidence-"+(Get-Date -Format yyyyMMdd)+".jsonl")),$row+"`n")};exit 0'
     }
     if($mode -eq 'evidence-error'){$newManager=$newManager.Replace('errors=@()','errors=@(@{error="synthetic evidence failure"})')}
-    if($mode -eq 'success'){
-        $storageFixture='$storage=@{time=[DateTimeOffset]::Now.ToString("o");nvme=@{disks=@();errors=@()}}|ConvertTo-Json -Compress -Depth 5;[IO.File]::WriteAllText((Join-Path $root ("logs\storage-"+(Get-Date -Format yyyyMMdd)+".jsonl")),$storage+"`n");$coverage=@{time=[DateTimeOffset]::Now.ToString("o");modules=@{performance=@{status="ok"}}}|ConvertTo-Json -Depth 5;[IO.File]::WriteAllText((Join-Path $root "coverage.json"),$coverage);'
+    if($mode -in @('success','coverage-incomplete')){
+        $storageFixture='$storage=@{time=[DateTimeOffset]::Now.ToString("o");nvme=@{disks=@();errors=@()}}|ConvertTo-Json -Compress -Depth 5;[IO.File]::WriteAllText((Join-Path $root ("logs\storage-"+(Get-Date -Format yyyyMMdd)+".jsonl")),$storage+"`n");. (Join-Path (Split-Path $PSScriptRoot) "collectors\Collection-Settings.ps1");$modules=@{};foreach($n in Get-IsolatedCollectionModules){$modules[$n]=@{status="ok";completedAt=[DateTimeOffset]::Now.ToString("o")}};$coverage=@{time=[DateTimeOffset]::Now.ToString("o");modules=$modules}|ConvertTo-Json -Depth 5;[IO.File]::WriteAllText((Join-Path $root "coverage.json"),$coverage);'
         $newManager=$newManager.Replace('$row=@{',$storageFixture+'$row=@{')
     }
+    if($mode -eq 'coverage-incomplete'){$newManager=$newManager.Replace('status="ok"','status="collecting"')}
     [IO.File]::WriteAllText((Join-Path $package 'management\Manage-Recorder.ps1'),$newManager,$utf8)
     $manifest=@{files=@($files|ForEach-Object {@{path=$_;sha256=(Get-FileHash (Join-Path $package $_)).Hash}})}
     [IO.File]::WriteAllText((Join-Path $package 'update-manifest.json'),($manifest|ConvertTo-Json -Depth 5),$utf8)
     $source=Get-Content (Join-Path $repo 'management\Update-Recorder.ps1') -Raw
+    $source=$source.Replace('AddSeconds(150)','AddSeconds(2)')
     $start=$source.IndexOf('$principal=');$end=$source.IndexOf('$package=',$start)
     if($start -lt 0 -or $end -lt 0){throw 'Unable to isolate production roots and elevation guard'}
     $source=$source.Remove($start,$end-$start).Insert($start,('$codeRoot="'+$codeRoot+'";$dataRoot="'+$dataRoot+'";$logRoot=Join-Path $dataRoot "logs"'+"`n"))

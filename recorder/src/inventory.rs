@@ -37,7 +37,22 @@ macro_rules! machine {
         }
         impl crate::metrics::Query for $name {
             const CLASS: &'static str = $class;
-            const FIELDS: &'static [&'static str] = &["*"];
+            const ALLOW_MISSING: bool = true;
+            const FIELDS: &'static [&'static str] = &[
+                "Manufacturer",
+                "Name",
+                "Product",
+                "Version",
+                "SMBIOSBIOSVersion",
+                "ReleaseDate",
+                "DriverVersion",
+                "DriverDate",
+                "Model",
+                "FirmwareRevision",
+                "Capacity",
+                "ConfiguredClockSpeed",
+                "PartNumber",
+            ];
         }
     };
 }
@@ -66,7 +81,7 @@ impl crate::metrics::Reader {
         add!("disks", Disks);
         add!("os", Os);
         add!("updates", Updates);
-        result.finish()
+        result.finish_bounded()
     }
     pub fn machine(&mut self) -> Value {
         let mut value = json!({"time":crate::now(),"errors":[]});

@@ -23,14 +23,14 @@ function Run([string]$module,[switch]$Failure){
     try{
         Assert ($p.WaitForExit(90000)) ('Native module timed out: '+$module)
         if($Failure){Assert ($p.ExitCode -ne 0) 'Duplicate owner was accepted'}
-        else{Assert ($p.ExitCode -eq 0) ('Native module failed: '+$module+' '+(Get-Content $stderr -Raw))}
+        else{Assert ($p.ExitCode -eq 0) ('Native module failed: '+$module+' '+(Get-Content -Encoding UTF8 $stderr -Raw))}
     }finally{if(-not $p.HasExited){$p.Kill();$null=$p.WaitForExit(5000)};$p.Dispose()}
 }
 foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
     Run $module
-    $row=Get-Content (Join-Path $logs ('detail-'+$module+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')) -Tail 1|ConvertFrom-Json
+    $row=Get-Content -Encoding UTF8 (Join-Path $logs ('detail-'+$module+'-'+(Get-Date -Format yyyyMMdd)+'.jsonl')) -Tail 1|ConvertFrom-Json
     if($module -eq 'crashConfiguration'){
-        $snapshot=Get-Content (Join-Path $root 'crash-configuration.json') -Raw|ConvertFrom-Json
+        $snapshot=Get-Content -Encoding UTF8 (Join-Path $root 'crash-configuration.json') -Raw|ConvertFrom-Json
         $reference=Get-CrashConfiguration $root
         foreach($field in @('CrashDumpEnabled','DumpFile','MinidumpDir','AlwaysKeepMemoryDump','AutoReboot','LogEvent','DedicatedDumpFile','DumpFileSize')){Assert ($snapshot.settings.$field -eq $reference.settings.$field) ('Crash setting mismatch: '+$field)}
         Assert ($snapshot.policy.status -eq $reference.policy.status) 'Crash policy status differs'
@@ -54,7 +54,7 @@ foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
                 }
             }
         }
-        $snapshot=Get-Content (Join-Path $root 'machine-inventory.json') -Raw|ConvertFrom-Json
+        $snapshot=Get-Content -Encoding UTF8 (Join-Path $root 'machine-inventory.json') -Raw|ConvertFrom-Json
         $expected=Get-MachineEvidence
         foreach($key in @('board','bios','cpu','memory','video','disk')){
             Assert (@($snapshot.$key).Count -eq @($expected[$key]).Count) ('Incident snapshot rows changed: '+$key)
@@ -75,7 +75,7 @@ foreach($module in @('inventory','power','gpuDetails','crashConfiguration')){
     }
 }
 Run extended
-$coverage=Get-Content (Join-Path $root 'coverage.json') -Raw|ConvertFrom-Json
+$coverage=Get-Content -Encoding UTF8 (Join-Path $root 'coverage.json') -Raw|ConvertFrom-Json
 Assert ($coverage.runId -eq 'native-diagnostics-test' -and $coverage.errors.Count -eq 0) 'Coverage lost fresh run status'
 Assert ($coverage.modules.storage.status -eq 'disabled') 'Disabled storage group is not disabled'
 
@@ -90,8 +90,9 @@ $oldHash=(Get-FileHash $old).Hash
 Run maintenance
 Assert (-not(Test-Path $old) -and (Test-Path ($old+'.gz'))) 'Old log was not compressed'
 Test-DiagnosticGzip ($old+'.gz') $oldHash
-Assert ((Get-Content ($old+'.gz.sha256') -Raw).Trim() -eq $oldHash) 'Compression receipt differs'
+Assert ((Get-Content -Encoding UTF8 ($old+'.gz.sha256') -Raw).Trim() -eq $oldHash) 'Compression receipt differs'
 Assert ((Get-FileHash $todayFile).Hash -eq $todayHash -and (Test-Path $yesterday)) 'Recent logs changed'
+Assert ((Get-FileHash $settings).Hash -eq $settingsHash) 'Read-only collectors changed active settings'
 foreach($module in @('inventory','power','gpuDetails','crashConfiguration','extended','maintenance')){
     $lockName=if($module -in @('extended','maintenance')){$module+'.owner.lock'}else{'module-'+$module+'.owner.lock'}
     $owner=[IO.FileStream]::new((Join-Path $logs $lockName),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)

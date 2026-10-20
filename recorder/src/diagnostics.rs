@@ -40,7 +40,7 @@ pub fn power(reader: &mut crate::metrics::Reader, thermal: &mut crate::metrics::
         "ACPI thermal zones",
         thermal.read::<Thermal>(None, false, 262144),
     );
-    evidence.finish()
+    evidence.finish_bounded()
 }
 
 pub fn nvidia_executable() -> Result<PathBuf, String> {
@@ -81,7 +81,34 @@ fn strip_processes(xml: &str) -> Result<String, String> {
     let (mut depth, mut skip, mut roots) = (0usize, None, 0usize);
     loop {
         let event = reader.read_event().map_err(|e| e.to_string())?;
+        if let Event::Start(tag) | Event::Empty(tag) = &event {
+            for attribute in tag.attributes() {
+                attribute
+                    .map_err(|e| e.to_string())?
+                    .decode_and_unescape_value(reader.decoder())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
         match &event {
+            Event::GeneralRef(reference) => {
+                if depth == 0 {
+                    return Err("Reference outside NVIDIA XML root".into());
+                }
+                if reference
+                    .resolve_char_ref()
+                    .map_err(|e| e.to_string())?
+                    .is_none()
+                    && !matches!(
+                        reference.as_ref(),
+                        b"amp" | b"lt" | b"gt" | b"apos" | b"quot"
+                    )
+                {
+                    return Err(
+                        "Unsupported NVIDIA XML entity; external entities are not loaded".into(),
+                    );
+                }
+            }
+            Event::CData(_) if depth == 0 => return Err("CDATA outside NVIDIA XML root".into()),
             Event::Start(tag) => {
                 if depth == 0 {
                     roots += 1;
@@ -136,7 +163,11 @@ pub fn gpu() -> Value {
         .and_then(|exe| crate::command::run(&exe, "-q -x", Duration::from_secs(5), false))
         .and_then(|text| strip_processes(&text));
     match result {
-        Ok(xml) => json!({"status":"ok","data":{"xml":xml},"issues":[]}),
+        Ok(xml) => {
+            let mut evidence = Evidence::default();
+            evidence.data.insert("xml".into(), json!(xml));
+            evidence.finish_bounded()
+        }
         Err(error) => {
             json!({"status":"partial","data":{},"issues":[{"source":"nvidia-smi XML","status":"unavailable","error":error}]})
         }
@@ -154,7 +185,16 @@ mod tests {
         assert!(!output.contains("private"));
         assert!(output.contains("<ecc>3</ecc>"));
         assert!(output.contains("<pcie>4</pcie>"));
-        for invalid in ["<gpu>", "<gpu></other>", "<gpu/><gpu/>", "text<gpu/>", ""] {
+        for invalid in [
+            "<gpu>",
+            "<gpu></other>",
+            "<gpu/><gpu/>",
+            "text<gpu/>",
+            "<gpu>&unknown;</gpu>",
+            "<gpu a=unquoted/>",
+            "<gpu a='1' a='2'/>",
+            "",
+        ] {
             assert!(strip_processes(invalid).is_err(), "{invalid}");
         }
     }

@@ -38,8 +38,16 @@ try {
     $failedRows=@(Get-Content (Join-Path $logRoot ('evidence-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
     if(-not $failedRows[-1].errors.Count){throw 'Error-before-exit restart regression fixture was not exercised'}
     if($Native){
-        $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
-        if($nativeWorkers.Count -ne 11 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
+        # Aggregation has its own 15-second cadence. Simulated-worker restart
+        # readiness can precede the first aggregate containing all fresh states.
+        $deadline=(Get-Date).AddSeconds(30)
+        do {
+            $state=Get-Content $runtimePath -Raw|ConvertFrom-Json
+            $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
+            $ready=$nativeWorkers.Count -eq 11 -and @($nativeWorkers|Where-Object state -NE 'recording').Count -eq 0
+            if(-not $ready){Start-Sleep -Milliseconds 500}
+        }while(-not $ready -and (Get-Date) -lt $deadline)
+        if(-not $ready){throw ('Rust workers were not selected and recording: '+($nativeWorkers|ConvertTo-Json -Compress))}
         $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'module-performance'){$peerIds[$w.name]=$w.pid}
         $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-performance').pid
         $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()

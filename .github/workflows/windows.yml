@@ -28,6 +28,7 @@ jobs:
         working-directory: recorder
         run: |
           cargo +stable test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable build --release --locked
       - name: Retain native worker for isolated validation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

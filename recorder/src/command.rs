@@ -144,7 +144,17 @@ mod win {
         }
     }
     pub fn run(exe: &Path, args: &str, timeout: Duration, oem: bool) -> Result<String, String> {
-        run_inner(exe, args, timeout, oem).map_err(|e| e.to_string())
+        run_inner(exe, args, timeout, oem).map_err(|e| {
+            let text = e.to_string();
+            if text.chars().count() > 4096 {
+                format!(
+                    "{} [error output limited]",
+                    text.chars().take(4096).collect::<String>()
+                )
+            } else {
+                text
+            }
+        })
     }
     fn run_inner(exe: &Path, args: &str, timeout: Duration, oem: bool) -> io::Result<String> {
         let text = exe
@@ -160,17 +170,24 @@ mod win {
             .encode_utf16()
             .chain(Some(0))
             .collect();
-        let ((stdout, stdout_write), (stderr, stderr_write), (stdin_read, stdin_write)) =
-            (pipe()?, pipe()?, pipe()?);
-        // stdin read must be inherited; its write end is closed to deliver EOF.
-        unsafe {
-            check(SetHandleInformation(
-                stdin_read.0,
-                HANDLE_FLAG_INHERIT,
-                HANDLE_FLAG_INHERIT,
-            ))?;
-        }
-        drop(stdin_write);
+        let ((stdout, stdout_write), (stderr, stderr_write)) = (pipe()?, pipe()?);
+        let security = SECURITY_ATTRIBUTES {
+            nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: null_mut(),
+            bInheritHandle: 1,
+        };
+        let nul: Vec<u16> = "NUL".encode_utf16().chain(Some(0)).collect();
+        let stdin_read = unsafe {
+            Handle::checked(CreateFileW(
+                nul.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                &security,
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL,
+                null_mut(),
+            ))?
+        };
         let job = unsafe { Handle::checked(CreateJobObjectW(null(), null()))? };
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;

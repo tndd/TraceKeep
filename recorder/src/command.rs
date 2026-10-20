@@ -315,28 +315,64 @@ mod win {
     #[cfg(test)]
     mod tests {
         use super::*;
+        // Real compiled child fixtures exercise the same native executable/pipe
+        // path as powercfg/nvidia-smi, without shell parser or console behavior.
+        #[test]
+        #[ignore = "spawned by helper_output_failure_timeout_and_repeated_handles"]
+        fn echo_child() {
+            use std::io::Write;
+            std::io::stdout()
+                .write_all(b"tracekeep-synthetic-output")
+                .unwrap();
+        }
+        #[test]
+        #[ignore = "spawned by helper_output_failure_timeout_and_repeated_handles"]
+        fn fail_child() {
+            std::process::exit(7);
+        }
+        #[test]
+        #[ignore = "spawned by helper_output_failure_timeout_and_repeated_handles"]
+        fn sleep_child() {
+            std::thread::sleep(Duration::from_secs(30));
+        }
+        #[test]
+        #[ignore = "spawned by helper_output_failure_timeout_and_repeated_handles"]
+        fn noisy_child() {
+            use std::io::Write;
+            std::io::stdout()
+                .write_all(&vec![b'x'; 5 * 1024 * 1024])
+                .unwrap();
+        }
         #[test]
         fn helper_output_failure_timeout_and_repeated_handles() {
-            let exe = std::path::PathBuf::from(std::env::var_os("WINDIR").unwrap())
-                .join("System32/cmd.exe");
+            let exe = std::env::current_exe().unwrap();
+            let args =
+                |name: &str| format!("--ignored --exact command::win::tests::{name} --nocapture");
             for _ in 0..10 {
                 assert!(
-                    run(&exe, "/d /c echo synthetic", Duration::from_secs(5), false)
+                    run(&exe, &args("echo_child"), Duration::from_secs(5), false)
                         .unwrap()
-                        .contains("synthetic")
+                        .contains("tracekeep-synthetic-output")
                 );
             }
-            assert!(run(&exe, "/d /c exit 7", Duration::from_secs(5), false)
-                .unwrap_err()
-                .contains("exit 7"));
-            let error = run(
+            assert!(
+                run(&exe, &args("fail_child"), Duration::from_secs(5), false)
+                    .unwrap_err()
+                    .contains("exit 7")
+            );
+            assert!(run(
                 &exe,
-                "/d /c ping -n 10 127.0.0.1",
+                &args("sleep_child"),
                 Duration::from_millis(100),
-                false,
+                false
             )
-            .unwrap_err();
-            assert!(error.contains("timed out"));
+            .unwrap_err()
+            .contains("timed out"));
+            assert!(
+                run(&exe, &args("noisy_child"), Duration::from_secs(10), false)
+                    .unwrap_err()
+                    .contains("output exceeds limit")
+            );
         }
     }
 }

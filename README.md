@@ -50,7 +50,7 @@ These four control commands require elevation. `stop` disables automatic starts 
 
 One SYSTEM task, **PC Diagnostics Recorder**, starts at boot. The coordinator monitors worker exits and log-file freshness. Stalled workers trigger an isolated restart after at least 120 seconds (270 seconds for the extended and log-maintenance workers). Disabled workers are reported and never launched. Repeated failures are limited to three restarts per ten minutes; other workers keep running. Coordinator events and a heartbeat explain recovery actions. This detects stalled recording, not hardware health. Boot configuration is installed, but a real reboot test remains a separate check.
 
-Machine `sources.json` takes precedence for both CUI and GUI. Per-user GUI source overrides are disabled while unified recording is configured. The recorder orchestration and hardware workers currently use PowerShell; Rust owns CUI commands, log reading, health presentation and export. Sensor access still uses the existing library/driver and `nvidia-smi`.
+Machine `sources.json` takes precedence for both CUI and GUI. Per-user GUI source overrides are disabled while unified recording is configured. Rust now runs eleven independent workers: configuration observation, processes, performance, reliability, disk space, inventory, power, GPU details, crash configuration, coverage and log maintenance. The coordinator, sensor/activity, event/storage and crash-file archive workers retain PowerShell. Rust also owns CUI commands, log reading, health presentation and export. Sensor access still uses the existing library/driver and `nvidia-smi`.
 
 ## Development
 
@@ -119,7 +119,7 @@ The GUI runs without administrator privileges. Reading/status and export need no
 * Independent external power-signal recorder import and clock alignment.
 * Configurable sensor mappings across motherboard/CPU models.
 
-Verification includes Rust log-reader tests, visualization semantics, legacy mutex coexistence, isolated simulated worker recovery/stop, empty-reading rejection, and mocked rollback with limited-token recovery. Tests never poll hardware or alter installed tasks.
+Verification includes Rust log-reader tests, visualization semantics, legacy mutex coexistence, isolated simulated worker recovery/stop, empty-reading rejection, and mocked rollback with limited-token recovery. Native compatibility tests query read-only Windows/NVIDIA providers in private log roots; sensor/driver workers and task migration are simulated. Tests never alter installed tasks, registry policy or hardware controls.
 
 ### Compact tray temperature display
 

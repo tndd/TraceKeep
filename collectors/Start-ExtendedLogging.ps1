@@ -7,13 +7,14 @@ $ErrorActionPreference='Stop'
 $dataRoot=Split-Path $LogRoot;$config=Get-CollectionSettings $dataRoot -SettingsPath $SettingsPath
 $mutexName='Global\PCDiagnostics-Extended-v1'
 if($Module){if($Module -notin @(Get-IsolatedCollectionModules)){throw 'Unknown isolated module'};$mutexName+='-'+$Module}
-$mutex=[Threading.Mutex]::new($false,$mutexName);$locked=$false
+$mutex=[Threading.Mutex]::new($false,$mutexName);$locked=$false;$owner=$null
 try {
     try {$locked=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$locked=$true}
     if(-not $locked){exit 0}
     $session=[guid]::NewGuid().ToString();$iteration=0;$hashes=@{};$next=0.0;$lastStart=$null;$missed=0L
     $clock=[Diagnostics.Stopwatch]::StartNew()
     if($Module -and -not(Test-CollectionModuleEnabled $config $Module)){exit 0}
+    if($Module){$owner=[IO.FileStream]::new((Join-Path $LogRoot ('module-'+$Module+'.owner.lock')),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)}
     $state=@{status='pending'}
     while(-not(Test-Path (Join-Path $LogRoot 'STOP-EXTENDED'))){
         if(-not $Module){
@@ -59,4 +60,4 @@ try {
         $wake=[Math]::Min($next,$clock.Elapsed.TotalMilliseconds+15000)
         while($clock.Elapsed.TotalMilliseconds -lt $wake -and -not(Test-Path (Join-Path $LogRoot 'STOP-EXTENDED'))){Start-Sleep -Milliseconds ([int][Math]::Max(1,[Math]::Min(500,$wake-$clock.Elapsed.TotalMilliseconds)))}
     }
-}finally{if($locked){$mutex.ReleaseMutex()};$mutex.Dispose()}
+}finally{if($owner){$owner.Dispose()};if($locked){$mutex.ReleaseMutex()};$mutex.Dispose()}

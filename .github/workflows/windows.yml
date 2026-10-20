@@ -24,6 +24,18 @@ jobs:
           node --check ui/mini.js
           node --check ui/mini-model.js
           node --check ui/temperature-gauge.js
+      - name: Standalone Rust worker tests and Windows release
+        working-directory: recorder
+        run: |
+          cargo +stable test --locked
+          cargo +stable build --release --locked
+      - name: Retain native worker for isolated validation
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracekeep-worker-validation
+          path: recorder/target/release/tracekeep-worker.exe
+          retention-days: 7
+          if-no-files-found: error
       - name: Visualization data integrity
         run: node --test scripts/Test-Visualizations.cjs
       - name: Mini monitor state integrity
@@ -32,6 +44,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-CollectorCoordination.ps1
       - name: Unified recorder with simulated workers
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1
+      - name: Mixed recorder with Rust workers and independent restart
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-UnifiedRecorder.ps1 -Native
       - name: Evidence recovery and partial-write handling
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-Evidence.ps1
       - name: Durable append and daily gzip storage
@@ -62,6 +76,8 @@ jobs:
         run: cargo +stable build --release --locked
       - name: Evidence completeness regressions with isolated sources
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-EvidenceCompleteness.ps1
+      - name: Rust worker compatibility, gzip and independent restart
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustWorkers.ps1
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
       - name: Desktop install and Windows startup recognition
@@ -71,12 +87,14 @@ jobs:
         run: |
           New-Item -ItemType Directory package | Out-Null
           Copy-Item src-tauri/target/release/pcdiag.exe,src-tauri/target/release/pc-diagnostics.exe,src-tauri/Cargo.lock -Destination package
+          Copy-Item recorder/target/release/tracekeep-worker.exe -Destination package
+          Copy-Item recorder/Cargo.lock -Destination package/worker-Cargo.lock
           Copy-Item management,collectors,docs -Destination package -Recurse
           Copy-Item scripts/Install-Tray.ps1 -Destination package
           Copy-Item src-tauri/icons/icon.ico -Destination package/TraceKeep.ico
           Copy-Item README.md -Destination package
           Copy-Item (Join-Path $env:RUNNER_TEMP 'tray-icons') -Destination package/test-previews -Recurse
-          $files = @('collectors\Log-Storage.ps1','collectors\Start-LogMaintenance.ps1','collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
+          $files = @('collectors\Log-Storage.ps1','collectors\Start-LogMaintenance.ps1','collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','tracekeep-worker.exe','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','management\Run-Recorder.ps1','management\Manage-Recorder.ps1')
           $manifest = @{files=@($files | ForEach-Object {@{path=$_;sha256=(Get-FileHash -LiteralPath (Join-Path 'package' $_) -Algorithm SHA256).Hash}})}
           [IO.File]::WriteAllText((Join-Path $PWD 'package/update-manifest.json'),($manifest | ConvertTo-Json -Depth 5),[Text.UTF8Encoding]::new($false))
           & package/pcdiag.exe help

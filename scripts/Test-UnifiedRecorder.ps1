@@ -1,3 +1,4 @@
+param([switch]$Native)
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot
 $testRoot=Join-Path ([IO.Path]::GetTempPath()) ('pcdiag-coordinator-test-'+[guid]::NewGuid().ToString('N'))
@@ -8,6 +9,7 @@ foreach($dir in @('management','collectors','data\logs')){[void][IO.Directory]::
 Copy-Item (Join-Path $repo 'collectors\Collection-Settings.ps1') (Join-Path $testRoot 'collectors\Collection-Settings.ps1')
 Copy-Item (Join-Path $repo 'collectors\Log-Storage.ps1') (Join-Path $testRoot 'collectors\Log-Storage.ps1')
 $codeRoot=$testRoot
+if($Native){Copy-Item (Join-Path $repo 'recorder\target\release\tracekeep-worker.exe') (Join-Path $testRoot 'tracekeep-worker.exe')}
 # Isolate the test's mutex. Never run a hardware collector in this test.
 $source=Get-Content (Join-Path $repo 'management\Run-Recorder.ps1') -Raw
 $source=$source.Replace('Global\PCDiagnostics-Coordinator-v1',('Local\PCDiagnostics-Test-'+[guid]::NewGuid().ToString('N')))
@@ -29,10 +31,26 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq 18}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
+    $expectedRestarts=if($Native){16}else{18}
+    do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq $expectedRestarts}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     $failedRows=@(Get-Content (Join-Path $logRoot ('maintenance-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
     if(-not $failedRows[-1].errors.Count){throw 'Error-before-exit restart regression fixture was not exercised'}
+    if($Native){
+        $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
+        if($nativeWorkers.Count -ne 2 -or @($nativeWorkers|Where-Object state -NE 'recording').Count){throw 'Rust workers were not selected and recording'}
+        $journalId=($nativeWorkers|Where-Object name -EQ 'module-configurationJournal').pid
+        $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-processes').pid
+        $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()
+        $deadline=(Get-Date).AddSeconds(30);$recovered=$false
+        do {
+            Start-Sleep -Milliseconds 500
+            $state=try {Get-Content $runtimePath -Raw -ErrorAction Stop|ConvertFrom-Json}catch{$null}
+            $replacement=$state.workers|Where-Object name -EQ 'module-processes'
+            $recovered=$replacement.recentRestarts -ge 1 -and $replacement.state -eq 'recording'
+        }while(-not $recovered -and (Get-Date) -lt $deadline)
+        if(-not $recovered -or ($state.workers|Where-Object name -EQ 'module-configurationJournal').pid -ne $journalId){throw 'Native failure did not recover independently'}
+    }
     [IO.File]::WriteAllText((Join-Path $dataRoot 'STOP-ALL'),'test stop',$utf8)
     if(-not $proc.WaitForExit(15000)){throw 'Supervisor did not stop'}
     if($proc.ExitCode -ne 0){throw ('Supervisor failed: '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}

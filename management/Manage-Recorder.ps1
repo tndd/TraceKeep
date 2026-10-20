@@ -34,6 +34,7 @@ function Stop-Unified {
         if($task.State -eq 'Running'){Stop-ScheduledTask -TaskName $taskName}
         # Only recorder processes executing this protected installation are eligible.
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'"|Where-Object {$_.CommandLine -and $_.CommandLine.Contains('"'+$codeRoot+'\collectors\')}|ForEach-Object {Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue}
+        Get-CimInstance Win32_Process -Filter "Name='tracekeep-worker.exe'"|Where-Object {$_.ExecutablePath -ieq (Join-Path $codeRoot 'tracekeep-worker.exe') -and $_.CommandLine.Contains('--log-root "'+$logRoot+'"')}|ForEach-Object {Stop-Process -Id $_.ProcessId -ErrorAction SilentlyContinue}
     }
 }
 function Start-Unified {
@@ -109,7 +110,7 @@ $activityScript=Join-Path (Split-Path $LegacyActivityRoot) 'Start-ContinuousDiag
 if(-not(Test-Path -LiteralPath $activityScript)){throw 'Legacy activity recorder script was not found beside the log directory.'}
 if(-not(Test-Path (Join-Path $oldRoot 'library\LibreHardwareMonitorLib.dll'))){throw 'Existing protected sensor library was not found. No driver or library will be downloaded.'}
 $package=Split-Path $PSScriptRoot
-foreach($file in @('collectors\Log-Storage.ps1','collectors\Start-LogMaintenance.ps1','collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','pc-diagnostics.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
+foreach($file in @('collectors\Log-Storage.ps1','collectors\Start-LogMaintenance.ps1','collectors\Collection-Settings.ps1','collectors\Extended-Evidence.ps1','collectors\Start-ExtendedLogging.ps1','management\Configure-Recorder.ps1','management\CrashDump-Policy.ps1','pcdiag.exe','pc-diagnostics.exe','tracekeep-worker.exe','management\Run-Recorder.ps1','management\Manage-Recorder.ps1','collectors\Start-AutomaticCpuLogging.ps1','collectors\Start-MotherboardLogging.ps1','collectors\Start-ContinuousDiagnostics.ps1','collectors\Read-NvidiaDiagnostics.ps1','collectors\Evidence-Core.ps1','collectors\Read-NvmeHealth.ps1','collectors\Start-EvidenceLogging.ps1')){if(-not(Test-Path (Join-Path $package $file))){throw "Incomplete package: $file"}}
 $legacyTasks=@()
 foreach($name in @('Codex Automatic CPU Diagnostics','Codex Automatic Motherboard Diagnostics')){
     $t=Get-ScheduledTask -TaskName $name
@@ -129,7 +130,7 @@ Protect-Directory $dataRoot
 Protect-Directory $logRoot
 $backup=Join-Path $dataRoot ('migration-backup-'+(Get-Date -Format yyyyMMdd-HHmmss));Protect-Directory $backup
 foreach($dir in @('management','collectors')){Copy-Item -LiteralPath (Join-Path $package $dir) -Destination $codeRoot -Recurse -Force}
-foreach($file in @('pcdiag.exe','pc-diagnostics.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
+foreach($file in @('pcdiag.exe','pc-diagnostics.exe','tracekeep-worker.exe')){Copy-Item -LiteralPath (Join-Path $package $file) -Destination $codeRoot -Force}
 Copy-Item -LiteralPath (Join-Path $oldRoot 'library') -Destination $codeRoot -Recurse -Force
 . (Join-Path $codeRoot 'collectors\Evidence-Core.ps1')
 . (Join-Path $codeRoot 'collectors\Collection-Settings.ps1')

@@ -116,7 +116,7 @@ try{
     foreach($file in Get-ChildItem $logs -Filter '*.jsonl'){$null=Compress-DiagnosticLog $file.FullName}
     $after=& $Cli history $start.ToString('o') $end|ConvertFrom-Json
     Assert ($LASTEXITCODE -eq 0) 'Native diagnostic gzip history failed'
-    foreach($module in @('inventory','power','gpuDetails','collectorHealth')){
+    foreach($module in @('inventory','power','gpuDetails','crashConfigurationHistory','collectorHealth')){
         Assert ($before.streams.$module.rows.Count -gt 0) ('Missing diagnostic history: '+$module)
         Assert (($before.streams.$module|ConvertTo-Json -Depth 30 -Compress) -ceq ($after.streams.$module|ConvertTo-Json -Depth 30 -Compress)) ('Raw/gzip history differs: '+$module)
     }

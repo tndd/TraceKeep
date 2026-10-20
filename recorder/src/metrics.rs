@@ -135,7 +135,7 @@ pub(crate) struct Evidence {
 impl Evidence {
     pub(crate) fn finish_bounded(mut self) -> Value {
         // Leave room for JSON escaping, issues and the recorder envelope below
-        // the existing history reader's 4 MiB line bound.
+        // older history readers' 4 MiB line bound.
         let mut remaining = 3 * 1024 * 1024;
         self.data.retain(|source, value| {
             let bytes = value.to_string().len() + source.len() + 8;

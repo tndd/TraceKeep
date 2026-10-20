@@ -6,6 +6,9 @@ use std::{collections::{BTreeMap,VecDeque},fs,io::{Read,BufRead,BufReader},path:
 const FILE_LIMIT:u64=512*1024*1024;
 const ROW_LIMIT:usize=100_000;
 const OUTPUT_LIMIT:usize=32*1024*1024;
+// Native writers accept 8 MiB JSON; allow the legacy CRLF terminator as well.
+const LINE_LIMIT:usize=8*1024*1024+2;
+const REFERENCE_LIMIT:usize=32*1024*1024;
 pub fn query(sources:&Sources,start:&str,end:&str)->Result<Value,String>{
     let a=DateTime::parse_from_rfc3339(start).map_err(|_|"Invalid start timestamp")?.timestamp_millis();
     let b=DateTime::parse_from_rfc3339(end).map_err(|_|"Invalid end timestamp")?.timestamp_millis();
@@ -28,8 +31,16 @@ fn read_stream(root:&Path,prefix:&str,a:i64,b:i64)->Value{
 fn read_stream_with_limit(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64)->Value{
     read_stream_with_limits(root,prefix,a,b,file_limit,ROW_LIMIT,OUTPUT_LIMIT)
 }
+fn remember(cache:&mut BTreeMap<String,Value>,bytes:&mut usize,hash:String,result:&Value,limit:usize){
+    if let Some(old)=cache.remove(&hash){*bytes=bytes.saturating_sub(old.to_string().len());}
+    let size=result.to_string().len();
+    if size>limit{return;}
+    if cache.len()>=64||bytes.saturating_add(size)>limit{cache.clear();*bytes=0;}
+    *bytes+=size;cache.insert(hash,result.clone());
+}
 fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row_limit:usize,output_limit:usize)->Value{
     let mut issues=vec![];let mut invalid=0;let mut incomplete=0;let mut unresolved=0;let mut clipped=false;let mut rows=VecDeque::new();let mut bytes_out=0;let mut cache:BTreeMap<String,Value>=BTreeMap::new();
+    let mut cache_bytes=0;
     let mut matched=0usize;let mut omitted=0usize;
     let files=match crate::log_files::daily_paths(root,prefix){Ok(v)=>v,Err(e)=>return json!({"rows":[],"issues":[e.to_string()],"truncated":false})};
     // Collectors name files using the recording machine's local calendar.
@@ -44,15 +55,15 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
             loop {
                 let mut line=Vec::new();
                 // Bound even a malformed single line, while continuing after its newline.
-                let count=Read::by_ref(&mut reader).take(4*1024*1024).read_until(b'\n',&mut line).map_err(|e|e.to_string())?;
+                let count=Read::by_ref(&mut reader).take(LINE_LIMIT as u64).read_until(b'\n',&mut line).map_err(|e|e.to_string())?;
                 if count==0{break;}
-                if line.last()!=Some(&b'\n') {if count==4*1024*1024{if !discarding{invalid+=1;}discarding=true;}else{incomplete+=1;}continue;}
+                if line.last()!=Some(&b'\n') {if count==LINE_LIMIT{if !discarding{invalid+=1;}discarding=true;}else{incomplete+=1;}continue;}
                 if discarding{discarding=false;continue;}
                 if line.iter().all(u8::is_ascii_whitespace){continue;}
                 let line=line.strip_prefix(&[239,187,191]).unwrap_or(&line);
                 let mut r=match serde_json::from_slice::<Value>(line){Ok(r)=>r,Err(_)=>{invalid+=1;continue;}};
                 if let Some(hash)=r["sha256"].as_str().map(str::to_owned){
-                    if !r["result"].is_null(){if cache.len()>=64{cache.clear();}cache.insert(hash,r["result"].clone());}
+                    if !r["result"].is_null(){remember(&mut cache,&mut cache_bytes,hash,&r["result"],REFERENCE_LIMIT);}
                     else if r["unchanged"]==true {if let Some(v)=cache.get(&hash){r["result"]=v.clone();}else{unresolved+=1;}}
                 }
                 let Some(t)=r["time"].as_str().and_then(|t|DateTime::parse_from_rfc3339(t).ok()).map(|t|t.timestamp_millis()) else{invalid+=1;continue;};
@@ -78,6 +89,31 @@ fn read_stream_with_limits(root:&Path,prefix:&str,a:i64,b:i64,file_limit:u64,row
  fn gzip(path:&Path,bytes:&[u8]) {
   let mut encoder=GzEncoder::new(fs::File::create(path).unwrap(),Compression::default());
   encoder.write_all(bytes).unwrap();encoder.finish().unwrap();
+ }
+ #[test]fn writer_sized_records_and_references_survive_raw_and_gzip_reads(){
+  let dir=std::env::temp_dir().join(format!("tracekeep-large-history-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();
+  let at=Local::now();let path=dir.join(format!("detail-reliability-{}.jsonl",at.format("%Y%m%d")));
+  let row=json!({"time":at.to_rfc3339(),"sha256":"synthetic","result":{"text":"x".repeat(5*1024*1024)}});
+  let repeated=json!({"time":at.to_rfc3339(),"sha256":"synthetic","unchanged":true});
+  let final_row=json!({"time":at.to_rfc3339(),"sequence":2});
+  let bytes=format!("{row}\r\n{repeated}\n{}\n{final_row}\n","x".repeat(LINE_LIMIT+10));
+  fs::write(&path,&bytes).unwrap();
+  let raw=read_stream(&dir,"detail-reliability-",at.timestamp_millis(),at.timestamp_millis()+1000);
+  assert_eq!(raw["returnedRows"],3);assert_eq!(raw["invalidLines"],1);assert_eq!(raw["unresolvedReferences"],0);
+  assert_eq!(raw["rows"][1]["result"]["text"].as_str().unwrap().len(),5*1024*1024);
+  gzip(&path.with_extension("jsonl.gz"),bytes.as_bytes());fs::remove_file(path).unwrap();
+  assert_eq!(read_stream(&dir,"detail-reliability-",at.timestamp_millis(),at.timestamp_millis()+1000),raw);
+  fs::remove_dir_all(dir).unwrap();
+ }
+ #[test]fn reference_cache_is_bounded_by_bytes_as_well_as_count(){
+  let mut cache=BTreeMap::new();let mut bytes=0;
+  remember(&mut cache,&mut bytes,"one".into(),&json!("x".repeat(80)),100);
+  remember(&mut cache,&mut bytes,"two".into(),&json!("x".repeat(80)),100);
+  assert_eq!(cache.len(),1);assert!(cache.contains_key("two"));assert!(bytes<=100);
+  remember(&mut cache,&mut bytes,"two".into(),&json!("small"),100);
+  assert_eq!(bytes,json!("small").to_string().len());
+  remember(&mut cache,&mut bytes,"oversized".into(),&json!("x".repeat(101)),100);
+  assert!(!cache.contains_key("oversized"));assert!(bytes<=100);
  }
  #[test]fn pre_failure_journal_and_progress_are_queryable_after_compression(){
   let dir=std::env::temp_dir().join(format!("tracekeep-prefailure-{}",Utc::now().timestamp_nanos_opt().unwrap()));fs::create_dir_all(&dir).unwrap();

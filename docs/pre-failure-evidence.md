@@ -211,8 +211,8 @@ an unnamed kill-on-close job at creation, with only their three standard handles
 inherited (Windows 10+). Each has a 5 s deadline, 4 MiB stdout and 64 KiB stderr
 bounds; errors are limited to 4096 characters. Malformed XML, provider errors
 and omitted oversized sources are explicit partial results. Inventory/power/GPU
-results have a combined 3 MiB data budget to stay within the existing history
-line limit, including recorder metadata and date escaping. WMI calls remain
+results have a combined 3 MiB data budget compatible with older history
+readers, including recorder metadata and date escaping. WMI calls remain
 isolated and subject to the coordinator's stall recovery.
 
 Crash configuration reads the existing registry/pagefile/volume/OS fields and
@@ -245,3 +245,12 @@ Remaining boundaries are CPU/board sensors (LibreHardwareMonitor/PawnIO), activi
 and NVMe IOCTL contracts), event recovery/incident capture, dump/WER preservation,
 and the coordinator. These require provider or recovery/failure tests of their
 own; they are not consolidated into another collector to reduce process count.
+
+
+The history reader previously rejected lines above 4 MiB although native writers
+allow 8 MiB and reliability queries allow 6 MiB. A synthetic 5 MiB record
+reproduces the lost history row. Reading now allows 8 MiB plus CRLF, with the same
+malformed/oversized-line recovery. The reference cache is bounded by 32 MiB of
+serialized data as well as 64 entries, independently of the output-row budget.
+Tests cover large raw/gzip records, unchanged references, subsequent valid rows
+after an oversized line and cache replacement/eviction accounting.

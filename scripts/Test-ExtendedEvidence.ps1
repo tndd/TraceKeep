@@ -28,6 +28,19 @@ $dest=$rows[0].destination;Remove-Item -LiteralPath ([IO.Path]::ChangeExtension(
 [IO.File]::WriteAllBytes(($dest+'.partial'),$bytes[0..1023])
 $rows=@(Copy-DiagnosticArchive @((Get-Item $source)) $archive $limits)
 Assert ($rows[0].status -eq 'archived' -and (Get-FileHash $dest).Hash -eq (Get-FileHash $source).Hash) 'Partial copy resume corrupted content'
+# Neither an interrupted prefix nor an already-complete partial can be trusted
+# solely because its length/identity matches the source.
+$sourceHash=(Get-FileHash $source).Hash
+foreach($length in @(1024,$bytes.Length)){
+    $badArchive=Join-Path $root ('corrupt-partial-'+$length);[void][IO.Directory]::CreateDirectory($badArchive)
+    $badDest=Join-Path $badArchive ([IO.Path]::GetFileName($dest));$badPartial=$badDest+'.partial'
+    $corrupt=New-Object byte[] $length;[Array]::Copy($bytes,$corrupt,$length);$corrupt[100]=$corrupt[100] -bxor 1
+    [IO.File]::WriteAllBytes($badPartial,$corrupt)
+    $rows=@(Copy-DiagnosticArchive @((Get-Item $source)) $badArchive $limits)
+    Assert ($rows[0].status -eq 'unavailable' -and $rows[0].error -like '*differs from the locked source*') 'Corrupt partial was certified as preserved'
+    Assert (-not (Test-Path $badDest) -and -not (Test-Path ([IO.Path]::ChangeExtension($badDest,'.json')))) 'Mismatch published an archive or receipt'
+    Assert ((Test-Path $badPartial) -and [IO.File]::ReadAllBytes($badPartial)[100] -eq $corrupt[100] -and (Get-FileHash $source).Hash -eq $sourceHash) 'Mismatch destroyed original or partial evidence'
+}
 $limits.maxArchiveFileBytes=100
 $rows=@(Copy-DiagnosticArchive @((Get-Item $source)) (Join-Path $root 'too-small') $limits)
 Assert ($rows[0].status -eq 'skipped' -and $rows[0].reason -eq 'file-size-limit') 'Archive limit silently discarded a source'

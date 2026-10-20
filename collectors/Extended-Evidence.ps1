@@ -225,9 +225,18 @@ function Copy-DiagnosticArchive($Files,$ArchiveRoot,$Limits,[int]$BudgetSeconds=
                     while($timer.Elapsed.TotalSeconds -lt $BudgetSeconds -and ($n=$source.Read($buffer,0,$buffer.Length)) -gt 0){$target.Write($buffer,0,$n)}
                     $target.Flush($true);$complete=($target.Length -eq $source.Length)
                 }finally{$target.Dispose()}
+                if($complete){
+                    # A resumed partial file may have the expected length but
+                    # different bytes. Hash the original while this handle still
+                    # denies writers/deletion; never certify only the copy.
+                    [void]$source.Seek(0,[IO.SeekOrigin]::Begin)
+                    $hash=[Security.Cryptography.SHA256]::Create()
+                    try {$sourceHash=([BitConverter]::ToString($hash.ComputeHash($source))).Replace('-','')}finally{$hash.Dispose()}
+                }
             }finally{$source.Dispose()}
             if($complete){
                 $row.sha256=(Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash
+                if($row.sha256 -ne $sourceHash){throw 'Archive content differs from the locked source; original and partial retained'}
                 if(Test-Path $dest){if((Get-FileHash $dest).Hash -ne $row.sha256){throw 'Existing archive hash conflict; both copies retained'};Remove-Item -LiteralPath $partial}else{[IO.File]::Move($partial,$dest)}
                 $row.status='archived';$row.destination=$dest
                 if($item.Extension -ieq '.dmp'){$row.validation=Get-DiagnosticDumpValidation $dest}

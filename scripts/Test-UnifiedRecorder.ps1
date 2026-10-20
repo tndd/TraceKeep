@@ -32,7 +32,7 @@ $proc=Start-Process -FilePath $shell -ArgumentList ('-NoProfile -ExecutionPolicy
 $null=$proc.Handle
 try {
     $deadline=(Get-Date).AddSeconds(30)
-    $expectedRestarts=if($Native){7}else{18}
+    $expectedRestarts=if($Native){6}else{18}
     do {Start-Sleep -Seconds 1;$runtimePath=Join-Path $dataRoot 'runtime.json';$state=if(Test-Path $runtimePath){Get-Content $runtimePath -Raw|ConvertFrom-Json}else{$null};$restarted=$state -and @($state.workers|Where-Object recentRestarts -GE 1).Count -eq $expectedRestarts}while(-not $restarted -and (Get-Date) -lt $deadline -and -not $proc.HasExited)
     if(-not $restarted){throw ('Supervisor did not restart all simulated workers. '+(Get-Content (Join-Path $testRoot 'stderr.txt') -Raw))}
     $failedRows=@(Get-Content (Join-Path $logRoot ('evidence-'+(Get-Date -Format yyyyMMdd)+'.jsonl'))|ConvertFrom-Json)
@@ -44,18 +44,18 @@ try {
         do {
             $state=Get-Content $runtimePath -Raw|ConvertFrom-Json
             $nativeWorkers=@($state.workers|Where-Object backend -EQ 'rust')
-            $ready=$nativeWorkers.Count -eq 11 -and @($nativeWorkers|Where-Object state -NE 'recording').Count -eq 0
+            $ready=$nativeWorkers.Count -eq 12 -and @($nativeWorkers|Where-Object state -NE 'recording').Count -eq 0
             if(-not $ready){Start-Sleep -Milliseconds 500}
         }while(-not $ready -and (Get-Date) -lt $deadline)
         if(-not $ready){throw ('Rust workers were not selected and recording: '+($nativeWorkers|ConvertTo-Json -Compress))}
-        $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'module-performance'){$peerIds[$w.name]=$w.pid}
-        $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'module-performance').pid
+        $peerIds=@{};foreach($w in $nativeWorkers|Where-Object name -NE 'activity'){$peerIds[$w.name]=$w.pid}
+        $victim=Get-Process -Id ($nativeWorkers|Where-Object name -EQ 'activity').pid
         $null=$victim.Handle;$victim.Kill();$null=$victim.WaitForExit(5000);$victim.Dispose()
         $deadline=(Get-Date).AddSeconds(30);$recovered=$false
         do {
             Start-Sleep -Milliseconds 500
             $state=try {Get-Content $runtimePath -Raw -ErrorAction Stop|ConvertFrom-Json}catch{$null}
-            $replacement=$state.workers|Where-Object name -EQ 'module-performance'
+            $replacement=$state.workers|Where-Object name -EQ 'activity'
             $recovered=$replacement.recentRestarts -ge 1 -and $replacement.state -eq 'recording'
         }while(-not $recovered -and (Get-Date) -lt $deadline)
         if(-not $recovered){throw 'Native failure did not recover'}

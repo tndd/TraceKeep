@@ -40,9 +40,9 @@ fn display(v:&Value){
 fn run()->Result<i32,String>{
     let args:Vec<String>=std::env::args().skip(1).collect();
     let command=args.first().map(String::as_str).unwrap_or("help");
-    if command=="history" {
+    if command=="history" || command=="workspace-history" {
         if args.len()!=3{return Err("Use: pcdiag history START_RFC3339 END_RFC3339 (at most two hours)".into());}
-        println!("{}",diagnostics_core::history::query(&Sources::load()?,&args[1],&args[2])?);return Ok(0);
+        println!("{}",if command=="workspace-history"{diagnostics_core::history::query_workspace(&Sources::load()?,&args[1],&args[2])?}else{diagnostics_core::history::query(&Sources::load()?,&args[1],&args[2])?});return Ok(0);
     }
     #[cfg(windows)]
     if command=="tray" {

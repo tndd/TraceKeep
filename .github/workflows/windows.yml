@@ -83,6 +83,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustMetrics.ps1
       - name: Native inventory, power, GPU, coverage and maintenance compatibility
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustDiagnostics.ps1
+      - name: Native activity ownership, progress, recovery and history
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustActivity.ps1
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
       - name: Desktop install and Windows startup recognition

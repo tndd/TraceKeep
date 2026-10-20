@@ -1,3 +1,4 @@
+mod activity;
 mod collect;
 mod command;
 mod coverage;
@@ -132,6 +133,7 @@ struct Options {
     module: String,
     run_id: String,
     samples: u64,
+    interval_ms: Option<u64>,
 }
 impl Options {
     fn parse(args: impl IntoIterator<Item = String>) -> Result<Self, String> {
@@ -144,6 +146,7 @@ impl Options {
                 "--module",
                 "--run-id",
                 "--samples",
+                "--interval-ms",
             ]
             .contains(&key.as_str())
             {
@@ -165,6 +168,7 @@ impl Options {
         let module = required("--module")?;
         let run_id = required("--run-id")?;
         if ![
+            "activity",
             "configurationJournal",
             "processes",
             "performance",
@@ -190,7 +194,16 @@ impl Options {
             .transpose()
             .map_err(|_| "Invalid sample count")?
             .unwrap_or(0);
+        let interval_ms = values
+            .remove("--interval-ms")
+            .map(|s| s.parse::<u64>())
+            .transpose()
+            .map_err(|_| "Invalid sampling interval")?;
+        if interval_ms.is_some_and(|v| module != "activity" || !(1000..=5000).contains(&v)) {
+            return Err("Activity interval must be 1000..5000 ms".into());
+        }
         Ok(Self {
+            interval_ms,
             logs,
             settings,
             module,
@@ -205,6 +218,7 @@ fn interval(settings: &Value, module: &str) -> Result<Option<Duration>, String> 
         return Err("Unsupported settings schema".into());
     }
     let defaults = match module {
+        "activity" => 2,
         "processes" => 30,
         "reliability" | "power" | "crashConfiguration" => 300,
         "inventory" => 1800,
@@ -226,7 +240,12 @@ fn interval(settings: &Value, module: &str) -> Result<Option<Duration>, String> 
             .as_u64()
             .ok_or("Invalid interval")?
     };
-    if !(15..=86400).contains(&seconds) {
+    let range = if module == "activity" {
+        1..=5
+    } else {
+        15..=86400
+    };
+    if !range.contains(&seconds) {
         return Err("Interval out of range".into());
     }
     Ok(Some(Duration::from_secs(seconds)))
@@ -333,6 +352,9 @@ fn run(options: &Options) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     fs::create_dir_all(&options.logs).map_err(|e| e.to_string())?;
+    if options.module == "activity" {
+        return activity::run(options, &settings);
+    }
     if options.module == "extended" {
         return coverage::run(options, &settings).map_err(|e| e.to_string());
     }
@@ -387,6 +409,12 @@ fn main() {
         }
     };
     if let Err(error) = run(&options) {
+        if options.module == "activity" {
+            let _ = storage::append(
+                &options.logs.join(format!("errors-{}.jsonl", day())),
+                &json!({"time":now(),"error":error,"pid":std::process::id(),"runId":options.run_id}),
+            );
+        }
         // Best effort only: an unwritable disk must not be reported as success.
         let _ = storage::snapshot(
             &options
@@ -439,6 +467,7 @@ mod tests {
             module: "configurationJournal".into(),
             run_id: "synthetic".into(),
             samples: 1,
+            interval_ms: None,
         };
         record_loop(&options,Duration::from_secs(15),||{
             let state:Value=serde_json::from_slice(&fs::read(root.join("module-state/configurationJournal.json")).unwrap()).unwrap();

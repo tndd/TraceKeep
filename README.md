@@ -197,3 +197,10 @@ hardware or changes recorder state.
 Build the frontend before Rust: `npm ci --prefix frontend`, `npm test --prefix frontend`,
 `npm run build --prefix frontend`, then run the Rust tests and release build above.
 Generated dashboard files, test captures, real histories and binaries are not committed.
+
+
+The aggregate activity worker (CPU load, memory, disk throughput and GPU CSV)
+now joins the native workers while retaining its independent process and legacy
+ownership/progress contracts. See [native boundaries and workspace transport](docs/pre-failure-evidence.md#native-aggregate-activity-and-workspace-reads).
+The full history CLI remains unchanged; `pcdiag workspace-history START END`
+returns the smaller presentation transport used by the detailed dashboard.

@@ -15,9 +15,9 @@ fn report_workspace_state(ready:bool,message:String,view:Option<String>)->Result
     std::fs::write(root.join(name),value.to_string()).map_err(|e|e.to_string())
 }
 #[tauri::command]
-async fn query_history(start:String,end:String)->Result<Value,String>{
+async fn query_history(start:String,end:String,workspace:Option<bool>)->Result<Value,String>{
     if HISTORY_BUSY.swap(true,Ordering::SeqCst){return Err("記録を読み込み中です。".into());}
-    let result=tauri::async_runtime::spawn_blocking(move||diagnostics_core::history::query(&Sources::load()?,&start,&end)).await.map_err(|e|e.to_string()).and_then(|v|v);
+    let result=tauri::async_runtime::spawn_blocking(move||if workspace.unwrap_or(false){diagnostics_core::history::query_workspace(&Sources::load()?,&start,&end)}else{diagnostics_core::history::query(&Sources::load()?,&start,&end)}).await.map_err(|e|e.to_string()).and_then(|v|v);
     HISTORY_BUSY.store(false,Ordering::SeqCst);result
 }
 #[tauri::command]

@@ -1,4 +1,17 @@
 $ErrorActionPreference='Stop'
+function Get-UpdateDumpPolicySummary($Policy) {
+    # Registry provider metadata contains a large live object graph, not settings.
+    if($Policy.current){
+        $values=[ordered]@{}
+        foreach($property in $Policy.current.PSObject.Properties){
+            if($property.Name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')){
+                $values[$property.Name]=$property.Value
+            }
+        }
+        $Policy.current=$values
+    }
+    return $Policy
+}
 function Read-UpdateSnapshot([string]$Path) {
     # Readers must permit atomic replacement and tolerate short sharing windows.
     # A permanently locked, missing or invalid snapshot still fails verification.
@@ -92,7 +105,7 @@ try {
     if(-not $ready){throw 'Isolated collectors did not complete fresh initial evidence; inspect coverage and storage logs'}
     . (Join-Path $package 'management\CrashDump-Policy.ps1')
     $dumpPolicy=@{status='disabled'}
-    if($collection.modules.automaticDump.enabled){$dumpPolicy=Enable-DiagnosticDumps $dataRoot;$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
+    if($collection.modules.automaticDump.enabled){$dumpPolicy=Get-UpdateDumpPolicySummary (Enable-DiagnosticDumps $dataRoot);$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
     $nvmeStatus=@($storage.nvme.disks|ForEach-Object {[pscustomobject]@{number=$_.number;status=$_.status;unsafeShutdowns=$_.health.counters.unsafeShutdowns;mediaErrors=$_.health.counters.mediaErrors;errorLogEntryCount=$_.health.counters.errorLogEntryCount;error=$_.error}})
     Save-EvidenceJson $audit @{phase='active';verifiedAt=[DateTimeOffset]::Now.ToString('o');files=$files;previousFiles=$oldFiles;evidenceErrors=$row.errors}
     [pscustomobject]@{status='Extended evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;collectionSettings=$settingsPath;coverage=$coverage.modules;evidenceErrors=$row.errors;nvmeHealth=$nvmeStatus;nvmeErrors=$storage.nvme.errors;dumpPolicy=$dumpPolicy;bootRestartTested=$false}|ConvertTo-Json -Depth 8

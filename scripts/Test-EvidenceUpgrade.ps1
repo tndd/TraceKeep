@@ -7,6 +7,17 @@ $ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'manage
 if($parseErrors){throw 'Updater parse failed'}
 $definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Read-UpdateSnapshot'},$true)
 Invoke-Expression $definition.Extent.Text
+$summaryDefinition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-UpdateDumpPolicySummary'},$true)
+Invoke-Expression $summaryDefinition.Extent.Text
+# A registry provider graph is irrelevant to the diagnostic values. Never walk it.
+$provider=New-Object PSObject
+$provider|Add-Member ScriptProperty ExpensiveGraph {throw 'Provider metadata was traversed'}
+$policy=@{status='already-configured';current=[pscustomobject]@{CrashDumpEnabled=7;AlwaysKeepMemoryDump=1;DumpFile='%SystemRoot%\MEMORY.DMP';PSPath='synthetic';PSParentPath='synthetic';PSChildName='CrashControl';PSDrive=$provider;PSProvider=$provider};differences=@()}
+$summary=Get-UpdateDumpPolicySummary $policy
+$encoded=$summary|ConvertTo-Json -Depth 8
+$decoded=$encoded|ConvertFrom-Json
+if($decoded.current.CrashDumpEnabled -ne 7 -or $decoded.current.AlwaysKeepMemoryDump -ne 1 -or $decoded.current.DumpFile -ne '%SystemRoot%\MEMORY.DMP' -or $encoded.Length -gt 1000 -or @($decoded.current.PSObject.Properties.Name|Where-Object {$_ -like 'PS*'}).Count){throw 'Dump policy output retained provider metadata or lost registry values'}
+Write-Output 'PASS: dump policy JSON excludes provider graphs and retains registry values'
 $readerRoot=Join-Path $env:TEMP ('tracekeep-snapshot-reader-'+[guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($readerRoot)
 $snapshot=Join-Path $readerRoot 'coverage.json'

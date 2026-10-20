@@ -1,6 +1,62 @@
 $ErrorActionPreference='Stop'
 $repo=Split-Path $PSScriptRoot
 $utf8=[Text.UTF8Encoding]::new($false)
+# Exercise the production reader without invoking the elevated updater body.
+$tokens=$null;$parseErrors=$null
+$ast=[Management.Automation.Language.Parser]::ParseFile((Join-Path $repo 'management\Update-Recorder.ps1'),[ref]$tokens,[ref]$parseErrors)
+if($parseErrors){throw 'Updater parse failed'}
+$definition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Read-UpdateSnapshot'},$true)
+Invoke-Expression $definition.Extent.Text
+$summaryDefinition=$ast.Find({param($node)$node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq 'Get-UpdateDumpPolicySummary'},$true)
+Invoke-Expression $summaryDefinition.Extent.Text
+# A registry provider graph is irrelevant to the diagnostic values. Never walk it.
+$provider=New-Object PSObject
+$provider|Add-Member ScriptProperty ExpensiveGraph {throw 'Provider metadata was traversed'}
+$policy=@{status='already-configured';current=[pscustomobject]@{CrashDumpEnabled=7;AlwaysKeepMemoryDump=1;DumpFile='%SystemRoot%\MEMORY.DMP';PSPath='synthetic';PSParentPath='synthetic';PSChildName='CrashControl';PSDrive=$provider;PSProvider=$provider};differences=@()}
+$summary=Get-UpdateDumpPolicySummary $policy
+$encoded=$summary|ConvertTo-Json -Depth 8
+$decoded=$encoded|ConvertFrom-Json
+if($decoded.current.CrashDumpEnabled -ne 7 -or $decoded.current.AlwaysKeepMemoryDump -ne 1 -or $decoded.current.DumpFile -ne '%SystemRoot%\MEMORY.DMP' -or $encoded.Length -gt 1000 -or @($decoded.current.PSObject.Properties.Name|Where-Object {$_ -like 'PS*'}).Count){throw 'Dump policy output retained provider metadata or lost registry values'}
+Write-Output 'PASS: dump policy JSON excludes provider graphs and retains registry values'
+$readerRoot=Join-Path $env:TEMP ('tracekeep-snapshot-reader-'+[guid]::NewGuid().ToString('N'))
+[void][IO.Directory]::CreateDirectory($readerRoot)
+$snapshot=Join-Path $readerRoot 'coverage.json'
+[IO.File]::WriteAllText($snapshot,'{"status":"synthetic"}',$utf8)
+# A short exclusive writer reproduces the sharing exception seen in deployment.
+$lockScript=Join-Path $readerRoot 'lock.ps1'
+[IO.File]::WriteAllText($lockScript,@'
+param($Path,$Ready,$Release)
+$ErrorActionPreference='Stop'
+$stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+try {
+    [IO.File]::WriteAllText($Ready,'locked')
+    $deadline=(Get-Date).AddSeconds(10)
+    while(-not(Test-Path $Release) -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 20}
+    Start-Sleep -Milliseconds 500
+}finally{$stream.Dispose()}
+'@,$utf8)
+$ready=Join-Path $readerRoot 'ready';$release=Join-Path $readerRoot 'release'
+$locker=Start-Process powershell.exe -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -File "'+$lockScript+'" -Path "'+$snapshot+'" -Ready "'+$ready+'" -Release "'+$release+'"') -WindowStyle Hidden -PassThru
+$null=$locker.Handle
+try {
+    $deadline=(Get-Date).AddSeconds(10)
+    while(-not(Test-Path $ready) -and -not $locker.HasExited -and (Get-Date) -lt $deadline){Start-Sleep -Milliseconds 20}
+    if(-not(Test-Path $ready)){throw 'Lock fixture failed'}
+    $reproduced=$false;try {Get-Content -LiteralPath $snapshot -Raw -ErrorAction Stop|Out-Null}catch{$reproduced=$true}
+    if(-not $reproduced){throw 'Original sharing failure did not reproduce'}
+    [IO.File]::WriteAllText($release,'release after delay',$utf8)
+    if((Read-UpdateSnapshot $snapshot).status -ne 'synthetic'){throw 'Transient sharing conflict did not recover'}
+    $null=$locker.WaitForExit(5000)
+    [IO.File]::WriteAllText($snapshot,'{invalid',$utf8)
+    $rejected=$false;try {Read-UpdateSnapshot $snapshot|Out-Null}catch{$rejected=$true}
+    if(-not $rejected){throw 'Invalid JSON accepted'}
+    $hold=[IO.File]::Open($snapshot,[IO.FileMode]::Open,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    try {
+        $rejected=$false;try {Read-UpdateSnapshot $snapshot|Out-Null}catch{$rejected=$true}
+        if(-not $rejected){throw 'Persistent sharing conflict accepted'}
+    }finally{$hold.Dispose()}
+    Write-Output 'PASS: reproduced sharing violation, retry recovery, malformed and persistently locked snapshot rejection'
+}finally{if(-not $locker.HasExited){$locker.Kill();$null=$locker.WaitForExit(5000)};$locker.Dispose()}
 foreach($mode in @('success','failure','evidence-error','storage-missing','coverage-incomplete')){
     $root=Join-Path $env:TEMP ('pcdiag-update-simulation-'+[guid]::NewGuid().ToString('N'))
     $codeRoot=Join-Path $root 'installed';$dataRoot=Join-Path $root 'data';$package=Join-Path $root 'package'

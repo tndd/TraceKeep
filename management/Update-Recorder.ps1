@@ -1,4 +1,34 @@
 $ErrorActionPreference='Stop'
+function Get-UpdateDumpPolicySummary($Policy) {
+    # Registry provider metadata contains a large live object graph, not settings.
+    if($Policy.current){
+        $values=[ordered]@{}
+        foreach($property in $Policy.current.PSObject.Properties){
+            if($property.Name -notin @('PSPath','PSParentPath','PSChildName','PSDrive','PSProvider')){
+                $values[$property.Name]=$property.Value
+            }
+        }
+        $Policy.current=$values
+    }
+    return $Policy
+}
+function Read-UpdateSnapshot([string]$Path) {
+    # Readers must permit atomic replacement and tolerate short sharing windows.
+    # A permanently locked, missing or invalid snapshot still fails verification.
+    for($attempt=0;$attempt -lt 20;$attempt++){
+        try {
+            $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            try {
+                $reader=[IO.StreamReader]::new($stream,[Text.Encoding]::UTF8,$true)
+                try {$text=$reader.ReadToEnd()}finally{$reader.Dispose()}
+            }finally{$stream.Dispose()}
+            return ($text|ConvertFrom-Json -ErrorAction Stop)
+        }catch [IO.IOException]{
+            if($attempt -eq 19){throw}
+            Start-Sleep -Milliseconds 100
+        }
+    }
+}
 $principal=[Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
 if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Run this update once from an Administrator PowerShell.'}
 $codeRoot=Join-Path $env:ProgramFiles 'PCDiagnostics';$dataRoot=Join-Path $env:ProgramData 'PCDiagnostics';$logRoot=Join-Path $dataRoot 'logs'
@@ -62,7 +92,7 @@ try {
     do {
         $coveragePath=Join-Path $dataRoot 'coverage.json'
         if(Test-Path $coveragePath){
-            $coverage=Get-Content -Encoding UTF8 $coveragePath -Raw|ConvertFrom-Json
+            $coverage=Read-UpdateSnapshot $coveragePath
             if(Test-CollectionCoverageReady $coverage $collection $since){
                 $storageFile=Get-ChildItem -LiteralPath $logRoot -Filter 'storage-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
                 $storage=if($storageFile){Get-Content -Encoding UTF8 -LiteralPath $storageFile.FullName -Tail 1|ConvertFrom-Json}else{$null}
@@ -75,7 +105,7 @@ try {
     if(-not $ready){throw 'Isolated collectors did not complete fresh initial evidence; inspect coverage and storage logs'}
     . (Join-Path $package 'management\CrashDump-Policy.ps1')
     $dumpPolicy=@{status='disabled'}
-    if($collection.modules.automaticDump.enabled){$dumpPolicy=Enable-DiagnosticDumps $dataRoot;$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
+    if($collection.modules.automaticDump.enabled){$dumpPolicy=Get-UpdateDumpPolicySummary (Enable-DiagnosticDumps $dataRoot);$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
     $nvmeStatus=@($storage.nvme.disks|ForEach-Object {[pscustomobject]@{number=$_.number;status=$_.status;unsafeShutdowns=$_.health.counters.unsafeShutdowns;mediaErrors=$_.health.counters.mediaErrors;errorLogEntryCount=$_.health.counters.errorLogEntryCount;error=$_.error}})
     Save-EvidenceJson $audit @{phase='active';verifiedAt=[DateTimeOffset]::Now.ToString('o');files=$files;previousFiles=$oldFiles;evidenceErrors=$row.errors}
     [pscustomobject]@{status='Extended evidence upgrade verified';logs=$logRoot;incidents=(Join-Path $dataRoot 'incidents');checkpoints=(Join-Path $dataRoot 'event-checkpoints');backup=$backup;collectionSettings=$settingsPath;coverage=$coverage.modules;evidenceErrors=$row.errors;nvmeHealth=$nvmeStatus;nvmeErrors=$storage.nvme.errors;dumpPolicy=$dumpPolicy;bootRestartTested=$false}|ConvertTo-Json -Depth 8

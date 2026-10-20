@@ -1,4 +1,10 @@
 mod collect;
+mod command;
+mod coverage;
+mod crash;
+mod diagnostics;
+mod inventory;
+mod maintenance;
 mod metrics;
 mod space;
 mod storage;
@@ -164,6 +170,12 @@ impl Options {
             "performance",
             "reliability",
             "diskSpace",
+            "inventory",
+            "crashConfiguration",
+            "power",
+            "gpuDetails",
+            "extended",
+            "maintenance",
         ]
         .contains(&module.as_str())
         {
@@ -194,7 +206,9 @@ fn interval(settings: &Value, module: &str) -> Result<Option<Duration>, String> 
     }
     let defaults = match module {
         "processes" => 30,
-        "reliability" => 300,
+        "reliability" | "power" | "crashConfiguration" => 300,
+        "inventory" => 1800,
+        "gpuDetails" => 60,
         "diskSpace" => 60,
         _ => 15,
     };
@@ -263,6 +277,8 @@ fn record_loop(
         recorder.state(json!({"status":"collecting","startedAt":started,"sequence":sequence,"schedule":schedule}))?;
         // Provider calls run only here, never in the coordinator or another worker.
         let result = collect();
+        let crash_snapshot =
+            (options.module == "crashConfiguration").then(|| result["data"].clone());
         let status = result["status"].clone();
         let issues = result["issues"].clone();
         let duration = timer.elapsed().as_millis() as u64;
@@ -274,6 +290,16 @@ fn record_loop(
             &schedule,
             Local::now(),
         )?;
+        if let Some(crash) = crash_snapshot {
+            storage::snapshot(
+                &options
+                    .logs
+                    .parent()
+                    .unwrap()
+                    .join("crash-configuration.json"),
+                &crash,
+            )?;
+        }
         let completed = now();
         let (next, skipped) = advance(due, clock.elapsed(), interval);
         due = next;
@@ -306,12 +332,20 @@ fn run(options: &Options) -> Result<(), String> {
         &storage::read_shared(&options.settings, 262144).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
+    fs::create_dir_all(&options.logs).map_err(|e| e.to_string())?;
+    if options.module == "extended" {
+        return coverage::run(options, &settings).map_err(|e| e.to_string());
+    }
+    if options.module == "maintenance" {
+        return maintenance::run(options).map_err(|e| e.to_string());
+    }
     let Some(interval) = interval(&settings, &options.module)? else {
         return Ok(());
     };
     let data = options.logs.parent().ok_or("Log root has no parent")?;
     let mut processes = collect::Processes::new();
     let mut metrics = metrics::Reader::default();
+    let mut thermal = metrics::Reader::namespace("ROOT/WMI");
     let reserve = if options.module == "diskSpace" {
         space::reserve(&settings)?
     } else {
@@ -321,6 +355,18 @@ fn run(options: &Options) -> Result<(), String> {
         "configurationJournal" => collect::journal(data, collect::registry()),
         "processes" => processes.collect(),
         "performance" => metrics.performance(),
+        "power" => diagnostics::power(&mut metrics,&mut thermal),
+        "gpuDetails" => diagnostics::gpu(),
+        "crashConfiguration" => crash::collect(data,&mut metrics),
+        "inventory" => {
+            let machine=metrics.machine();
+            let saved=storage::snapshot(&data.join("machine-inventory.json"),&machine);
+            let mut result=metrics.inventory();
+            for issue in machine["errors"].as_array().unwrap() { result["issues"].as_array_mut().unwrap().push(json!({"source":"machine-inventory","status":"unavailable","error":issue})); }
+            if let Err(error)=saved { result["issues"].as_array_mut().unwrap().push(json!({"source":"machine-inventory.json","status":"unavailable","error":error.to_string()})); }
+            if !result["issues"].as_array().unwrap().is_empty(){result["status"]=json!("partial");}
+            result
+        },
         "reliability" => metrics.reliability(),
         "diskSpace" => space::collect(data, reserve),
         _ => unreachable!(),

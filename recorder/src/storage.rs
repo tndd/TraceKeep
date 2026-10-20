@@ -10,7 +10,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-fn suffix(path: &Path, suffix: &str) -> PathBuf {
+pub(crate) fn suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut p = path.as_os_str().to_os_string();
     p.push(suffix);
     p.into()
@@ -23,7 +23,15 @@ pub fn json_bytes(row: &Value) -> io::Result<Vec<u8>> {
     // Windows PowerShell recognizes legacy WMI date values as DateTime only
     // with escaped slashes. Do not coerce unrelated strings that resemble dates.
     let mut text = serde_json::to_string(row)?;
-    for field in ["CreationDate", "TimeGenerated"] {
+    for field in [
+        "CreationDate",
+        "TimeGenerated",
+        "ReleaseDate",
+        "DriverDate",
+        "LastBootUpTime",
+        "InstallDate",
+        "LastWriteTimeUtc",
+    ] {
         text = escape_legacy_date(&text, field);
     }
     Ok(text.into_bytes())
@@ -154,9 +162,13 @@ pub fn append(path: &Path, row: &Value) -> io::Result<u64> {
 }
 
 pub fn snapshot(path: &Path, row: &Value) -> io::Result<()> {
+    snapshot_bytes(path, &json_bytes(row)?)
+}
+
+pub(crate) fn snapshot_bytes(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temp = suffix(path, ".tmp");
     let mut file = File::create(&temp)?;
-    file.write_all(&json_bytes(row)?)?;
+    file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
     #[cfg(windows)]

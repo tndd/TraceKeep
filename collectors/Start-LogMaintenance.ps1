@@ -2,10 +2,11 @@ param([Parameter(Mandatory=$true)][string]$LogRoot,[int]$MaxPasses=0)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'Evidence-Core.ps1')
 $dataRoot=Split-Path $LogRoot
-$mutex=[Threading.Mutex]::new($false,'Global\PCDiagnostics-LogMaintenance-v1');$locked=$false
+$mutex=[Threading.Mutex]::new($false,'Global\PCDiagnostics-LogMaintenance-v1');$locked=$false;$owner=$null
 try {
     try {$locked=$mutex.WaitOne(0)}catch [Threading.AbandonedMutexException]{$locked=$true}
     if(-not $locked){exit 0}
+    $owner=[IO.FileStream]::new((Join-Path $LogRoot 'maintenance.owner.lock'),[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
     $iteration=0
     $previousErrors=@()
     while(-not(Test-Path -LiteralPath (Join-Path $LogRoot 'STOP-MAINTENANCE'))){
@@ -23,4 +24,4 @@ try {
         $iteration++;if($MaxPasses -gt 0 -and $iteration -ge $MaxPasses){break}
         for($i=0;$i -lt 60 -and -not(Test-Path -LiteralPath (Join-Path $LogRoot 'STOP-MAINTENANCE'));$i++){Start-Sleep -Seconds 1}
     }
-}finally{if($locked){$mutex.ReleaseMutex()};$mutex.Dispose()}
+}finally{if($owner){$owner.Dispose()};if($locked){$mutex.ReleaseMutex()};$mutex.Dispose()}

@@ -188,3 +188,69 @@ exclusion, opt-out and raw/gzip history equality. Mixed-recorder testing kills
 only its private performance worker and verifies recovery without restarting
 the other four native workers. Unit tests cover partial provider failures,
 counter precision/nulls, query bounds and incomplete directory scans.
+
+## Native diagnostic workers and maintenance
+
+Six more resident PowerShell hosts are replaced: `inventory` (1800 s), `power`
+(300 s), `gpuDetails` (60 s), `crashConfiguration` (300 s), `extended` coverage
+(15 s) and `maintenance` (60 s). Eleven of eighteen workers are native; the
+coordinator remains separate. GUI lifetime, per-worker supervision, settings,
+opt-out and fallback behavior are preserved. The two non-module workers share
+per-root owner locks with their PowerShell fallbacks as well.
+
+Inventory retains all nine projections and the thirteen-field incident snapshot.
+Missing properties remain null; provider metadata and identities outside the
+existing allowlist are not serialized. Driver timestamps with unspecified
+fractional seconds/offset follow `Get-CimInstance` UTC semantics, not
+`ManagementDateTimeConverter`'s different local-time default. The history API
+also exposes `inventory` and `power`, including older PowerShell records.
+
+Power still queries battery/ACPI and the six read-only `powercfg` commands, with
+OEM decoding. NVIDIA XML still excludes every process subtree. Helpers enter
+an unnamed kill-on-close job at creation, with only their three standard handles
+inherited (Windows 10+). Each has a 5 s deadline, 4 MiB stdout and 64 KiB stderr
+bounds; errors are limited to 4096 characters. Malformed XML, provider errors
+and omitted oversized sources are explicit partial results. Inventory/power/GPU
+results have a combined 3 MiB data budget compatible with older history
+readers, including recorder metadata and date escaping. WMI calls remain
+isolated and subject to the coordinator's stall recovery.
+
+Crash configuration reads the existing registry/pagefile/volume/OS fields and
+compares the saved dump policy without changing it. The durable detail record
+precedes `crash-configuration.json` and the completion heartbeat. Dump metadata
+scans have time/entry/depth bounds, at most 100 files per root, and report
+incomplete scans and skipped links; they never read or modify dump contents.
+
+Coverage reads bounded state files, rejects another run, heartbeats older than
+45 s or more than 5 s in the future, and retains storage/NVMe enablement rules.
+Maintenance streams 64 KiB chunks under the existing writer lock, keeps today
+and yesterday raw, verifies decompressed SHA-256 and gzip CRC, commits the hash
+receipt, then removes the redundant raw copy. A failed/aborted pass, active
+writer, corrupt archive or mismatching archive retains the original. Interrupted
+commits resume without overwriting conflicting evidence; clock rollback restores
+verified archives before appending. A pass handles at most 64 files, with
+compression heartbeats and stop checks between chunks. There is no age or
+free-space deletion policy.
+
+Validation includes `scripts/Test-RustDiagnostics.ps1`, the mixed-worker restart
+test, standalone unit tests and the complete Windows pipeline. Native tests
+cover provider parity, Unicode dates/output, policy/snapshot preservation,
+ownership, opt-out and raw/gzip history. Synthetic tests cover interrupted
+compression, conflicts, malformed XML, stale coverage, bounded results and native
+helper failure/output limits. Native unit-test failures explicitly stop CI before
+the release-build command can mask them.
+
+Remaining boundaries are CPU/board sensors (LibreHardwareMonitor/PawnIO), activity
+(legacy collector coordination and paired progress), storage (Windows reliability
+and NVMe IOCTL contracts), event recovery/incident capture, dump/WER preservation,
+and the coordinator. These require provider or recovery/failure tests of their
+own; they are not consolidated into another collector to reduce process count.
+
+
+The history reader previously rejected lines above 4 MiB although native writers
+allow 8 MiB and reliability queries allow 6 MiB. A synthetic 5 MiB record
+reproduces the lost history row. Reading now allows 8 MiB plus CRLF, with the same
+malformed/oversized-line recovery. The reference cache is bounded by 32 MiB of
+serialized data as well as 64 entries, independently of the output-row budget.
+Tests cover large raw/gzip records, unchanged references, subsequent valid rows
+after an oversized line and cache replacement/eviction accounting.

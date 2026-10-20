@@ -28,6 +28,7 @@ jobs:
         working-directory: recorder
         run: |
           cargo +stable test --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo +stable build --release --locked
       - name: Retain native worker for isolated validation
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -80,6 +81,8 @@ jobs:
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustWorkers.ps1
       - name: Native metrics, reliability and space compatibility
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustMetrics.ps1
+      - name: Native inventory, power, GPU, coverage and maintenance compatibility
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-RustDiagnostics.ps1
       - name: Tray lifecycle on isolated Windows host
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/Test-TrayLifecycle.ps1
       - name: Desktop install and Windows startup recognition

@@ -2,7 +2,8 @@
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-trait Query: DeserializeOwned + Serialize {
+pub(crate) trait Query: DeserializeOwned + Serialize {
+    const ALLOW_MISSING: bool = false;
     const CLASS: &'static str;
     const FIELDS: &'static [&'static str];
 }
@@ -10,13 +11,14 @@ macro_rules! query {
     ($name:ident, $class:literal, {$($field:ident:$kind:ty),+ $(,)?}) => {
         #[allow(non_snake_case)]
         #[derive(Deserialize, Serialize)]
-        struct $name { $( $field: Option<$kind> ),+ }
+        pub(crate) struct $name { $( $field: Option<$kind> ),+ }
         impl Query for $name {
             const CLASS: &'static str = $class;
             const FIELDS: &'static [&'static str] = &[$(stringify!($field)),+];
         }
     };
 }
+pub(crate) use query;
 query!(Cpu, "Win32_PerfFormattedData_PerfOS_Processor", {
     Name:String, PercentProcessorTime:u64, PercentPrivilegedTime:u64,
     PercentInterruptTime:u64, PercentDPCTime:u64, InterruptsPersec:u64, DPCsQueuedPersec:u64
@@ -45,7 +47,15 @@ query!(Reliability, "Win32_ReliabilityRecords", {
 });
 
 fn query_text<T: Query>(filter: Option<&str>) -> String {
-    let mut text = format!("SELECT {} FROM {}", T::FIELDS.join(","), T::CLASS);
+    let mut text = format!(
+        "SELECT {} FROM {}",
+        if T::ALLOW_MISSING {
+            "*".into()
+        } else {
+            T::FIELDS.join(",")
+        },
+        T::CLASS
+    );
     if let Some(filter) = filter {
         text.push_str(" WHERE ");
         text.push_str(filter);
@@ -65,16 +75,40 @@ fn reliability_filter(at: chrono::DateTime<chrono::Local>) -> Result<String, Str
     ))
 }
 
+fn cim_date_millis(date: &str) -> Result<i64, String> {
+    // CIM treats unspecified microseconds and UTC offset as zero. DriverDate
+    // commonly uses YYYYMMDD000000.******+***; ManagementDateTimeConverter's
+    // local-time default differs from the Get-CimInstance contract here.
+    let mut date = date.to_owned();
+    if date.len() == 25 && date.is_ascii() {
+        if &date[15..21] == "******" {
+            date.replace_range(15..21, "000000");
+        }
+        if &date[22..25] == "***" {
+            date.replace_range(21..25, "+000");
+        }
+    }
+    crate::collect::date_millis(&date)
+}
+
 fn legacy_time(row: &mut Value) -> Result<(), String> {
-    if let Some(date) = row["TimeGenerated"].as_str() {
-        row["TimeGenerated"] = json!(format!("/Date({})/", crate::collect::date_millis(date)?));
+    for field in [
+        "TimeGenerated",
+        "ReleaseDate",
+        "DriverDate",
+        "LastBootUpTime",
+        "InstallDate",
+    ] {
+        if let Some(date) = row[field].as_str() {
+            row[field] = json!(format!("/Date({})/", cim_date_millis(date)?));
+        }
     }
     Ok(())
 }
 
 // Stop consuming the provider iterator at the bound. Do not retain a partial
 // result as if it were complete; the caller emits an explicit source issue.
-fn bounded_rows(
+pub(crate) fn bounded_rows(
     rows: impl IntoIterator<Item = Result<Value, String>>,
     max_rows: usize,
     max_bytes: usize,
@@ -94,12 +128,30 @@ fn bounded_rows(
 }
 
 #[derive(Default)]
-struct Evidence {
-    data: Map<String, Value>,
-    issues: Vec<Value>,
+pub(crate) struct Evidence {
+    pub(crate) data: Map<String, Value>,
+    pub(crate) issues: Vec<Value>,
 }
 impl Evidence {
-    fn add(&mut self, key: &str, source: &str, result: Result<Vec<Value>, String>) {
+    pub(crate) fn finish_bounded(mut self) -> Value {
+        // Leave room for JSON escaping, issues and the recorder envelope below
+        // older history readers' 4 MiB line bound.
+        let mut remaining = 3 * 1024 * 1024;
+        self.data.retain(|source, value| {
+            let bytes = value.to_string().len() + source.len() + 8;
+            if bytes > remaining {
+                self.issues
+                    .push(json!({"source":source,"status":"unavailable",
+                    "error":"Combined diagnostic result exceeds byte limit; source omitted"}));
+                false
+            } else {
+                remaining -= bytes;
+                true
+            }
+        });
+        self.finish()
+    }
+    pub(crate) fn add(&mut self, key: &str, source: &str, result: Result<Vec<Value>, String>) {
         match result {
             Ok(rows) => {
                 self.data.insert(key.into(), json!(rows));
@@ -109,38 +161,71 @@ impl Evidence {
                 .push(json!({"source":source,"status":"unavailable","error":error})),
         }
     }
-    fn finish(self) -> Value {
+    pub(crate) fn finish(self) -> Value {
         json!({"status":if self.issues.is_empty(){"ok"}else{"partial"},"data":self.data,"issues":self.issues})
     }
 }
 
 #[cfg(windows)]
-#[derive(Default)]
-pub struct Reader(Option<wmi::WMIConnection>);
+pub struct Reader {
+    connection: Option<wmi::WMIConnection>,
+    namespace: &'static str,
+}
+#[cfg(windows)]
+impl Default for Reader {
+    fn default() -> Self {
+        Self::namespace("ROOT/CIMV2")
+    }
+}
 #[cfg(windows)]
 impl Reader {
-    fn read<T: Query>(
+    pub fn namespace(namespace: &'static str) -> Self {
+        Self {
+            connection: None,
+            namespace,
+        }
+    }
+    pub(crate) fn read<T: Query>(
         &mut self,
         filter: Option<&str>,
         dates: bool,
         max_bytes: usize,
     ) -> Result<Vec<Value>, String> {
         let result = (|| {
-            if self.0.is_none() {
-                self.0 = Some(wmi::WMIConnection::new().map_err(|e| e.to_string())?);
+            if self.connection.is_none() {
+                self.connection = Some(
+                    wmi::WMIConnection::with_namespace_path(self.namespace)
+                        .map_err(|e| e.to_string())?,
+                );
             }
             let rows = self
-                .0
+                .connection
                 .as_ref()
                 .unwrap()
                 .exec_query(query_text::<T>(filter))
                 .map_err(|e| e.to_string())?;
             bounded_rows(
                 rows.map(|row| {
-                    let value: T = row
-                        .map_err(|e| e.to_string())?
-                        .into_desr()
-                        .map_err(|e| e.to_string())?;
+                    let row = row.map_err(|e| e.to_string())?;
+                    let value: T = if T::ALLOW_MISSING {
+                        let names = row.list_properties().map_err(|e| e.to_string())?;
+                        let mut fields = Map::new();
+                        for field in T::FIELDS {
+                            let value = if names.iter().any(|name| name.eq_ignore_ascii_case(field))
+                            {
+                                serde_json::to_value(
+                                    row.get_property(field).map_err(|e| e.to_string())?,
+                                )
+                                .map_err(|e| e.to_string())?
+                            } else {
+                                Value::Null
+                            };
+                            fields.insert((*field).into(), value);
+                        }
+                        serde_json::from_value(Value::Object(fields)).map_err(|e| e.to_string())?
+                    } else {
+                        row.into_desr().map_err(|e| e.to_string())?
+                    };
                     let mut value = serde_json::to_value(value).map_err(|e| e.to_string())?;
                     if dates {
                         legacy_time(&mut value)?;
@@ -152,7 +237,7 @@ impl Reader {
             )
         })();
         if result.is_err() {
-            self.0 = None;
+            self.connection = None;
         }
         result
     }
@@ -195,6 +280,31 @@ impl Reader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cim_driver_dates_with_unspecified_fraction_and_offset_match_cim_utc() {
+        assert_eq!(
+            cim_date_millis("20060621000000.******+***").unwrap(),
+            1150848000000
+        );
+        assert_eq!(
+            cim_date_millis("20060621000000.123456+***").unwrap(),
+            1150848000123
+        );
+        assert!(cim_date_millis("********000000.******+***").is_err());
+    }
+    #[test]
+    fn combined_diagnostics_stay_readable_with_explicit_omissions() {
+        let mut result = Evidence::default();
+        result
+            .data
+            .insert("large".into(), json!("x".repeat(3 * 1024 * 1024)));
+        result.data.insert("small".into(), json!({"value":1}));
+        let result = result.finish_bounded();
+        assert_eq!(result["status"], "partial");
+        assert!(result["data"].get("large").is_none());
+        assert_eq!(result["data"]["small"]["value"], 1);
+        assert_eq!(result["issues"][0]["source"], "large");
+    }
     #[test]
     fn counter_precision_nulls_and_latency_fields_survive_serialization() {
         let input = json!({"Name":"disk","AvgDisksecPerRead":9007199254740993u64,

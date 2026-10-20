@@ -35,6 +35,7 @@ try {
     if (-not $legacyLocked) { exit 0 }
     if (Test-Path -LiteralPath (Join-Path $root 'STOP')) { exit 0 }
     $session = [guid]::NewGuid().ToString()
+    Write-DiagnosticProgress $root 'activity' $session 0 -Stage 'initializing'
     $gpuExe = Get-ChildItem -Path 'C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe' -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
     $os = Get-CimInstance Win32_OperatingSystem
     Write-Record 'sessions' ([ordered]@{time=[DateTimeOffset]::Now.ToString('o'); session=$session; pid=$PID; intervalSeconds=($IntervalMilliseconds/1000); lastBoot=$os.LastBootUpTime.ToString('o'); osVersion=$os.Version; gpuReader=$gpuExe; logRoot=$root; note='No AC waveform or internal PSU protection measurements are available.'})
@@ -45,6 +46,8 @@ try {
     while (-not (Test-Path -LiteralPath (Join-Path $root 'STOP'))) {
         $timer = [Diagnostics.Stopwatch]::StartNew()
         $now = [DateTimeOffset]::Now
+        $previous=$writers[('activity-'+(Get-Date -Format yyyyMMdd))]
+        Write-DiagnosticProgress $root 'activity' $session $iteration $previous
         $record = [ordered]@{time=$now.ToString('o'); session=$session; sequence=$iteration; cpuLoadPercent=$null; availableMemoryMB=$null; committedMemoryPercent=$null; diskReadBytesPerSecond=$null; diskWriteBytesPerSecond=$null; diskQueueLength=$null; gpu=$null; errors=@()}
         try {
             $cpu = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"

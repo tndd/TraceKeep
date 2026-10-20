@@ -7,6 +7,8 @@ $shell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $mutex = [Threading.Mutex]::new($false,'Global\PCDiagnostics-Coordinator-v1')
 $locked=$false
 $workers=@{}
+$runId=[guid]::NewGuid().ToString()
+$activeSettings=Join-Path $DataRoot 'active-collection-settings.json'
 $utf8=[Text.UTF8Encoding]::new($false)
 . (Join-Path $codeRoot 'collectors\Collection-Settings.ps1')
 . (Join-Path $codeRoot 'collectors\Log-Storage.ps1')
@@ -34,6 +36,9 @@ function Launch-Worker($w) {
     $args='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "'+$w.script+'" -LogRoot "'+$logRoot+'"'
     if($w.name -in @('cpu','board')) {$args+=' -LibraryDirectory "'+$library+'"'}
     if($w.name -in @('cpu','board','activity')) {$args+=' -IntervalMilliseconds '+$intervals[$w.name]}
+    if($w.name -in @('evidence','extended') -or $w.module){$args+=' -SettingsPath "'+$activeSettings+'"'}
+    if($w.name -eq 'extended' -or $w.module){$args+=' -RunId "'+$runId+'"'}
+    if($w.module){$args+=' -Module "'+$w.module+'"'}
     $w.process=Start-Process -FilePath $shell -ArgumentList $args -WindowStyle Hidden -PassThru
     $null=$w.process.Handle
     $w.started=[DateTimeOffset]::Now
@@ -44,11 +49,18 @@ try {
     try {$locked=$mutex.WaitOne(0)} catch [Threading.AbandonedMutexException] {$locked=$true}
     if(-not $locked){exit 0}
     if(Test-Path (Join-Path $DataRoot 'STOP-ALL')){exit 0}
+    Save-DiagnosticJson $activeSettings $collection
+    Save-DiagnosticJson (Join-Path $DataRoot 'recorder-run.json') @{time=[DateTimeOffset]::Now.ToString('o');runId=$runId;pid=$PID;collection=$collection;intervalMilliseconds=$intervals}
     foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED','STOP-MAINTENANCE')){$path=Join-Path $logRoot $marker;if(Test-Path -LiteralPath $path){Remove-Item -LiteralPath $path}}
     foreach($entry in @(@('cpu','Start-AutomaticCpuLogging.ps1','cpu-auto-'),@('board','Start-MotherboardLogging.ps1','board-auto-'),@('activity','Start-ContinuousDiagnostics.ps1','activity-'),@('evidence','Start-EvidenceLogging.ps1','evidence-'),@('extended','Start-ExtendedLogging.ps1','extended-'),@('maintenance','Start-LogMaintenance.ps1','maintenance-'))){
         $workers[$entry[0]]=@{name=$entry[0];script=(Join-Path $codeRoot ('collectors\'+$entry[1]));prefix=$entry[2];process=$null;started=[DateTimeOffset]::Now;restarts=@();retryAt=[DateTimeOffset]::Now;state='starting'}
         $workers[$entry[0]].enabled=($entry[0] -in @('evidence','extended','maintenance') -or $collection.modules[$entry[0]].enabled)
         if($workers[$entry[0]].enabled){Launch-Worker $workers[$entry[0]]}else{$workers[$entry[0]].state='disabled';$workers[$entry[0]].errorCount=0}
+    }
+    foreach($name in Get-IsolatedCollectionModules){
+        $key='module-'+$name
+        $workers[$key]=@{name=$key;module=$name;script=(Join-Path $codeRoot 'collectors\Start-ExtendedLogging.ps1');prefix=($key+'-');process=$null;started=[DateTimeOffset]::Now;restarts=@();retryAt=[DateTimeOffset]::Now;state='starting';enabled=(Test-CollectionModuleEnabled $collection $name)}
+        if($workers[$key].enabled){Launch-Worker $workers[$key]}else{$workers[$key].state='disabled';$workers[$key].errorCount=0}
     }
     while(-not (Test-Path (Join-Path $DataRoot 'STOP-ALL'))){
         $now=[DateTimeOffset]::Now
@@ -58,8 +70,9 @@ try {
             $age=if($file){($now.UtcDateTime-$file.LastWriteTimeUtc).TotalSeconds}else{$null}
             $elapsed=($now-$w.started).TotalSeconds
             $alive=$w.process -and -not $w.process.HasExited
-            $freshLimit=if($w.name -in @('extended','maintenance')){90}elseif($w.name -eq 'evidence'){45}else{[Math]::Max(10,$intervals[$w.name]/1000+5)}
+            $freshLimit=if($w.module){45}elseif($w.name -in @('extended','maintenance')){90}elseif($w.name -eq 'evidence'){45}else{[Math]::Max(10,$intervals[$w.name]/1000+5)}
             $stallLimit=[Math]::Max(120,3*$freshLimit)
+            if($w.module -in @('dumpArchive','werArchive')){$stallLimit=600}
             $stalled=$alive -and $elapsed -gt $stallLimit -and ($null -eq $age -or $age -gt $stallLimit)
             if($stalled){Record-Controller @{event='worker-stalled';worker=$w.name;pid=$w.process.Id;logAgeSeconds=$age};$w.process.Kill();$null=$w.process.WaitForExit(5000);$alive=-not $w.process.HasExited}
             if(-not $alive){
@@ -69,11 +82,13 @@ try {
                 elseif($now -ge $w.retryAt){$w.restarts+=,$now;if($w.process){$w.process.Dispose()};Launch-Worker $w}
             } else {$w.state=if($null -ne $age -and $age -le $freshLimit){'recording'}else{'waiting-for-samples'}}
             $w.errorCount=0
-            if($w.name -in @('evidence','extended','maintenance') -and $file){
+            # Do not replace waiting/cooldown with a stale error row: that would
+            # reset retryAt on every pass and prevent recovery indefinitely.
+            if($alive -and ($w.name -in @('evidence','extended','maintenance') -or $w.module) -and $file){
                 try {$row=Get-Content -Encoding UTF8 -LiteralPath $file.FullName -Tail 1|ConvertFrom-Json;$w.errorCount=@($row.errors).Count;if($w.errorCount){$w.state='recording-with-errors'}}catch{$w.state='unreadable-evidence';$w.errorCount=1}
             }
         }
-        $runtime=@{time=$now.ToString('o');pid=$PID;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;enabled=$_.enabled;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}
+        $runtime=@{time=$now.ToString('o');pid=$PID;runId=$runId;logRoot=$logRoot;workers=@($workers.Values|ForEach-Object {@{name=$_.name;enabled=$_.enabled;pid=if($_.process){$_.process.Id}else{$null};state=$_.state;errorCount=$_.errorCount;recentRestarts=$_.restarts.Count}})}
         $temp=Join-Path $DataRoot 'runtime.tmp'
         [IO.File]::WriteAllText($temp,($runtime|ConvertTo-Json -Depth 5),$utf8)
         $dest=Join-Path $DataRoot 'runtime.json'
@@ -83,7 +98,10 @@ try {
 } finally {
     if($locked){
         foreach($marker in @('STOP-CPU','STOP-BOARD','STOP','STOP-EVIDENCE','STOP-EXTENDED','STOP-MAINTENANCE')){[IO.File]::WriteAllText((Join-Path $logRoot $marker),'coordinator stop',$utf8)}
-        foreach($w in $workers.Values){if($w.process){if(-not $w.process.HasExited -and -not $w.process.WaitForExit(5000)){$w.process.Kill();$null=$w.process.WaitForExit(5000)};$w.process.Dispose()}}
+        # One shared grace period, not five seconds multiplied by worker count.
+        $stopClock=[Diagnostics.Stopwatch]::StartNew()
+        while($stopClock.Elapsed.TotalSeconds -lt 5 -and @($workers.Values|Where-Object {$_.process -and -not $_.process.HasExited}).Count){Start-Sleep -Milliseconds 100}
+        foreach($w in $workers.Values){if($w.process){if(-not $w.process.HasExited){$w.process.Kill()};$w.process.Dispose()}}
         Record-Controller @{event='coordinator-stopped'}
         $mutex.ReleaseMutex()
     }

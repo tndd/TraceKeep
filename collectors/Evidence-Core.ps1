@@ -5,12 +5,7 @@ function Test-EvidenceReady($row,[DateTimeOffset]$since) {
     return $row -and $row.event -eq 'heartbeat' -and $row.time -and ([DateTimeOffset]$row.time) -ge $since -and ($row.PSObject.Properties.Name -contains 'errors') -and @($row.errors).Count -eq 0 -and ($row.eventsStatus -eq 'disabled' -or @($row.channels|Where-Object {$_.channel -eq 'System' -and $null -ne $_.watermark}).Count -gt 0)
 }
 function Save-EvidenceJson($path,$value) {
-    $temp=$path+'.tmp'
-    $json=if($null -eq $value){'null'}else{ConvertTo-Json -InputObject $value -Depth 12}
-    $bytes=$script:EvidenceUtf8.GetBytes($json)
-    $stream=[IO.FileStream]::new($temp,[IO.FileMode]::Create,[IO.FileAccess]::Write,[IO.FileShare]::Read,4096,[IO.FileOptions]::WriteThrough)
-    try {$stream.Write($bytes,0,$bytes.Length);$stream.Flush($true)}finally{$stream.Dispose()}
-    if(Test-Path -LiteralPath $path){[IO.File]::Replace($temp,$path,$path+'.previous')}else{[IO.File]::Move($temp,$path)}
+    Save-DiagnosticJson $path $value
 }
 function Add-EvidenceRecord($root,$kind,$value,[string]$Day=(Get-Date -Format yyyyMMdd)) {
     $path=Join-Path $root ($kind+'-'+$Day+'.jsonl')
@@ -130,7 +125,7 @@ function Save-IncidentConditions($DataRoot,$Destination,$BootTime) {
     $manifest=Join-Path $Destination 'conditions.json'
     if(Test-Path -LiteralPath $manifest){return $manifest}
     $files=@()
-    foreach($name in @('machine-inventory.json','recorder-settings.json','collection-settings.json','coverage.json','sensor-driver-isolation.json','dump-policy-backup.json','event-channel-coverage.json')){
+    foreach($name in @('machine-inventory.json','recorder-settings.json','collection-settings.json','recorder-run.json','coverage.json','sensor-driver-isolation.json','dump-policy-backup.json','event-channel-coverage.json')){
         $source=Join-Path $DataRoot $name;$target=Join-Path $Destination $name
         $entry=@{file=$name;observedAt=[DateTimeOffset]::Now.ToString('o')}
         try {
@@ -181,7 +176,7 @@ function New-IncidentBundle($logRoot,$dataRoot,$bootTime,$crash) {
     Save-EvidenceJson (Join-Path $dest 'crash-configuration.json') $crash
     $conditions=Save-IncidentConditions $dataRoot $dest $bootTime
     Save-EvidenceJson (Join-Path $dest 'boot-events.json') @($events|ForEach-Object {@{time=$_.TimeCreated.ToString('o');channel='System';recordId=$_.RecordId;provider=$_.ProviderName;id=$_.Id;xml=$_.ToXml()}})
-    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','maintenance-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-')){
+    foreach($prefix in @('cpu-auto-','board-auto-','activity-','events-','sessions-','coordinator-','storage-','evidence-','extended-','maintenance-','detail-performance-','detail-processes-','detail-gpuDetails-','detail-inventory-','detail-power-','detail-reliability-','detail-dumpArchive-','detail-werArchive-','detail-diskSpace-','detail-configurationJournal-','detail-crashConfiguration-','progress-cpu-','progress-board-','progress-activity-')){
         foreach($file in @(Get-DiagnosticDailyLogs $logRoot $prefix|Sort-Object Name -Descending|Select-Object -First 2)){
             try {$copied+=Copy-EvidenceTail $file.FullName (Join-Path $dest ($file.Name -replace '\.gz$',''))}catch{$errors+=$_.Exception.Message}
         }

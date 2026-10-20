@@ -42,9 +42,11 @@ try {
     # Never load GUI settings or call SetDefault/SetSoftware on a control.
     $computer = [LibreHardwareMonitor.Hardware.Computer]::new()
     $computer.IsMotherboardEnabled = $true
+    Write-DiagnosticProgress $LogRoot 'board' $session $sequence $writer -Stage 'initializing'
     $computer.Open()
     while (-not (Test-Path -LiteralPath (Join-Path $LogRoot 'STOP-BOARD'))) {
         $timer = [Diagnostics.Stopwatch]::StartNew()
+        Write-DiagnosticProgress $LogRoot 'board' $session $sequence $writer
         $readings = @($computer.Hardware | ForEach-Object { Read-BoardHardware $_ })
         $usable = @($readings | Where-Object { $_.hardwareType -eq 'SuperIO' -and $_.available -and $_.type -in @('Voltage','Temperature','Fan') })
         if (-not $usable.Count) { throw 'No usable SuperIO voltage, temperature or fan sensors were obtained.' }

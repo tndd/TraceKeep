@@ -58,16 +58,21 @@ try {
         Start-Sleep -Seconds 2
     }while((Get-Date) -lt $deadline)
     if(-not $verified){throw 'Evidence worker did not verify System event checkpointing'}
-    $storageFile=Get-ChildItem -LiteralPath $logRoot -Filter 'storage-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
-    $storage=if($storageFile){Get-Content -Encoding UTF8 -LiteralPath $storageFile.FullName -Tail 1|ConvertFrom-Json}else{$null}
-    if(-not $storage -or ([DateTimeOffset]$storage.time) -lt $since -or -not $storage.nvme){throw 'New storage/NVMe evidence was not recorded'}
-    $coverage=$null;$deadline=(Get-Date).AddSeconds(150)
+    $coverage=$null;$storage=$null;$ready=$false;$deadline=(Get-Date).AddSeconds(150)
     do {
         $coveragePath=Join-Path $dataRoot 'coverage.json'
-        if(Test-Path $coveragePath){$coverage=Get-Content -Encoding UTF8 $coveragePath -Raw|ConvertFrom-Json;if(([DateTimeOffset]$coverage.time) -ge $since -and $coverage.modules){break}}
+        if(Test-Path $coveragePath){
+            $coverage=Get-Content -Encoding UTF8 $coveragePath -Raw|ConvertFrom-Json
+            if(Test-CollectionCoverageReady $coverage $collection $since){
+                $storageFile=Get-ChildItem -LiteralPath $logRoot -Filter 'storage-*.jsonl'|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
+                $storage=if($storageFile){Get-Content -Encoding UTF8 -LiteralPath $storageFile.FullName -Tail 1|ConvertFrom-Json}else{$null}
+                $needsNvme=$collection.modules.nvme.enabled -or $collection.modules.nvmeErrors.enabled
+                if(-not(Test-CollectionModuleEnabled $collection 'storage') -or ($storage -and ([DateTimeOffset]$storage.time) -ge $since -and (-not $needsNvme -or $storage.nvme))){$ready=$true;break}
+            }
+        }
         Start-Sleep -Seconds 2
     }while((Get-Date) -lt $deadline)
-    if(-not $coverage -or ([DateTimeOffset]$coverage.time) -lt $since){throw 'Extended evidence did not complete its initial collection pass'}
+    if(-not $ready){throw 'Isolated collectors did not complete fresh initial evidence; inspect coverage and storage logs'}
     . (Join-Path $package 'management\CrashDump-Policy.ps1')
     $dumpPolicy=@{status='disabled'}
     if($collection.modules.automaticDump.enabled){$dumpPolicy=Enable-DiagnosticDumps $dataRoot;$dumpPolicyChanged=$dumpPolicy.status -eq 'configured'}
